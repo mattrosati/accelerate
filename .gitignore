@@ -1,0 +1,83 @@
+# -------------------
+# Python
+# -------------------
+__pycache__/
+*.pkl
+*.pickle
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+*.env
+
+# -------------------
+# Jupyter / Anaconda
+# -------------------
+.ipynb_checkpoints
+*.ipynb_export.json
+.virtual_documents/
+anaconda_projects/
+
+# -------------------
+# Logs / Debug
+# -------------------
+*.log
+logs/
+wandb/
+lightning_logs/
+mlruns/
+*.out
+*.err
+
+# -------------------
+# Deep Learning Artifacts
+# -------------------
+# Model checkpoints
+*.ckpt
+*.pth
+*.pt
+*.h5
+*.onnx
+*.tflite
+
+# Training outputs
+checkpoints/
+outputs/
+runs/
+models/
+saved_models/
+
+# Large datasets (optional, if you store locally)
+data/
+datasets/
+*.npz
+*.npy
+*.csv
+*.tsv
+
+# -------------------
+# IDE / Editor
+# -------------------
+.vscode/
+
+# -------------------
+# OS files
+# -------------------
+.DS_Store
+Thumbs.db
+
+# -------------------
+# Latex
+# -------------------
+*.fdb_latexmk
+*.log
+*.pdf
+*.synctex.gz
+*.xdv
+__latexindent_temp.tex
+*.aux
+*.fls
+*.out%
