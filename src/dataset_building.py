@@ -12,6 +12,7 @@ import seaborn as sns
 from tqdm import tqdm
 
 from data_utils import build_continuous_time, load_label
+from constants import TARGETS
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Building full dataset in input destination.")
@@ -24,9 +25,6 @@ if __name__ == "__main__":
 
     # make destination h5py file
     global_f = h5py.File(os.path.join(args.destination, "all_data.hdf5"), "w")
-    global_f.create_group("raw")
-    global_f.create_group("labels")
-    global_f.create_group("time")
 
     # create unique set of overlapping ptids in labels and raw_data
     unique_ptid = set()
@@ -37,22 +35,43 @@ if __name__ == "__main__":
             unique_ptid.add(p)
 
     # build external links to raw_data files and groups for labels
+    counter = 0 # TBD
     for ptid in unique_ptid:
-        raw_f = os.path.join(args.raw_dir, ptid + ".icmh5")
-        global_f["raw"][ptid] = h5py.ExternalLink(raw_f, "/")
+        pt_group = global_f.create_group(ptid)
+        raw_f = os.path.join("./raw_data/", ptid + ".icmh5")
+        global_f[ptid]["raw"] = h5py.ExternalLink(raw_f, "/")
 
         # now for labels
-        global_f["labels"].create_group(ptid)
         df = load_label(ptid, args.labels_dir)
-        print(df)
+
+        # make one dataset for labels with custom dtype
+        nan_value = float(global_f[ptid + "/raw"].attrs["invalidValue"][0])
+        dt = np.dtype([(col, df[col].to_numpy().dtype) for col in df.columns])
+        df = df.fillna(value=nan_value)
+        arr = df.to_records(index=False)
+        global_f[ptid].create_dataset("labels", data=arr, dtype=arr.dtype)
+        global_f.attrs["invalid_val"] = nan_value
+        
+        # remove if I have no targets
+        df = pd.DataFrame(global_f[ptid + "/labels"][...])[TARGETS].replace(global_f.attrs["invalid_val"], np.nan)
+        all_null = pd.isnull(df).all(axis=0)
+        if all_null.sum() > 0:
+            print(ptid + " has no targets")
+            del global_f[ptid]
+        else:
+            counter += 1 # TBD
+
+        
 
 
-    # for each labels dataset, process and add each column as dataset in labels group
+
+        # if ptid == "1002":
+        #     print(list(global_f.attrs.items()))
+
+    print(counter)
 
 
     # continuous time and length comparisons
 
-
-    # remove patients without labels and raw_data
 
 

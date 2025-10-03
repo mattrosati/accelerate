@@ -51,7 +51,7 @@ def load_label(patient_id, labels_path, time="seconds"):
     divisor = 1 if time == "seconds" else 60 if time == "minutes" else 3600
 
     # converting datetime to microseconds unix time for interoperability with raw data
-    df["DateTime"] = (df["DateTime"].astype("int64") // 1000).round(-1)
+    df["DateTime"] = (df["DateTime"].astype("int64") // 1000).round(-4)
 
     return df
 
