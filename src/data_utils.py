@@ -50,14 +50,18 @@ def load_label(patient_id, labels_path, time="seconds"):
     # add column for elapsed time from start in seconds
     divisor = 1 if time == "seconds" else 60 if time == "minutes" else 3600
 
-    df[f"elapsed_{time}"] = (df["DateTime"] - df["DateTime"].iloc[0]).dt.total_seconds()
-    df.set_index(df[f"elapsed_{time}"], inplace=True)
+    # converting datetime to microseconds unix time for interoperability with raw data
+    df["DateTime"] = (df["DateTime"].astype("int64") // 1000).round(-1)
 
     return df
 
 
-def find_time_elapsed(ptid, calc, path):
+def find_time_elapsed(ptid, calc, path, time="seconds"):
     df = load_label(ptid, labels_path=path)
+
+    df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0]) // 1e6).astype("int32")
+    df.set_index(df[f"elapsed_{time}"], inplace=True)
+
     try:
         return df[calc][df[calc].notna()].index[0]
     except:
