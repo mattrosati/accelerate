@@ -61,11 +61,11 @@ def find_time_elapsed(ptid, calc, path, time="seconds"):
 
     df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0]) // 1e6).astype("int32")
     df.set_index(df[f"elapsed_{time}"], inplace=True)
-
     try:
-        return df[calc][df[calc].notna()].index[0]
+        return df[calc][df[calc].notna().all(axis=1)].index[0]
     except:
         print(f"No time found for {ptid}")
+        return None
 
 
 def build_continuous_time(f, variable_path):
