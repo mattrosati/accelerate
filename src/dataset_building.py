@@ -22,8 +22,7 @@ def continuous_time_process(hdf_obj, group):
         arr = cont.reset_index().to_numpy()
         processed.create_dataset(i, data = arr, dtype=arr.dtype)
         attrs = pd.DataFrame(hdf_obj[f"raw/{group}/{i}"].attrs["index"])
-        processed[i].attrs["start"] = attrs["starttime"].iloc[0]
-        processed[i].attrs["end"] = attrs["starttime"].iloc[0] + cont.index[-1]
+        processed[i].attrs["index"] = hdf_obj[f"raw/{group}/{i}"].attrs["index"]
         # print(processed[i].attrs["start"], processed[i].attrs["end"])
         # print(arr.shape)
 
@@ -80,10 +79,28 @@ if __name__ == "__main__":
         else:
             counter += 1 # TBD
 
-        # create continuous time array for all raw data
-        processed = pt_group.create_group("processed")
-        continuous_time_process(pt_group, "waves")
-        continuous_time_process(pt_group, "numerics")
+        # i don't think i actually need this
+        # # create continuous time array for all raw data
+        # processed = pt_group.create_group("processed")
+        # try:
+        #     continuous_time_process(pt_group, "waves")
+        #     continuous_time_process(pt_group, "numerics")
+        # except:
+        #     print(ptid)
+
+        #     # summarize numerics and waveforms
+        #     def summarize_series(name, obj, invalid_value=-99999):
+        #         print(f"Dataset: {name}")
+        #         df = pd.DataFrame(obj[:])
+        #         df.replace(invalid_value, np.nan, inplace=True)
+        #         print(f"Number of missing values: {df.isna().sum().sum()}")
+        #         print(df.describe())
+        #         print("\n")
+        #         return
+
+        #     print(f"Summarizing statistics for numerics and waveforms for patient {ptid}:")
+        #     pt_group["raw/numerics"].visititems(summarize_series)
+        #     f["raw/waves"].visititems(summarize_series)
 
         
         
