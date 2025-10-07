@@ -14,6 +14,22 @@ from tqdm import tqdm
 from data_utils import build_continuous_time, load_label
 from constants import TARGETS
 
+def continuous_time_process(hdf_obj, group):
+    processed = hdf_obj["processed"]
+
+    for i in hdf_obj[f"raw/{group}"].keys():
+        cont = build_continuous_time(hdf_obj, f"raw/{group}/{i}")
+        arr = cont.reset_index().to_numpy()
+        processed.create_dataset(i, data = arr, dtype=arr.dtype)
+        attrs = pd.DataFrame(hdf_obj[f"raw/{group}/{i}"].attrs["index"])
+        processed[i].attrs["start"] = attrs["starttime"].iloc[0]
+        processed[i].attrs["end"] = attrs["starttime"].iloc[0] + cont.index[-1]
+        # print(processed[i].attrs["start"], processed[i].attrs["end"])
+        # print(arr.shape)
+
+
+    return processed
+
 if __name__ == "__main__":
     parser = ArgumentParser(description="Building full dataset in input destination.")
 
@@ -22,6 +38,8 @@ if __name__ == "__main__":
     parser.add_argument("labels_dir", help="Labels dir")
 
     args = parser.parse_args()
+
+    np.random.seed(420)
 
     # make destination h5py file
     global_f = h5py.File(os.path.join(args.destination, "all_data.hdf5"), "w")
@@ -36,7 +54,8 @@ if __name__ == "__main__":
 
     # build external links to raw_data files and groups for labels
     counter = 0 # TBD
-    for ptid in unique_ptid:
+    for ptid in tqdm(list(unique_ptid)[:]):
+        print(ptid)
         pt_group = global_f.create_group(ptid)
         raw_f = os.path.join("./raw_data/", ptid + ".icmh5")
         global_f[ptid]["raw"] = h5py.ExternalLink(raw_f, "/")
@@ -46,10 +65,9 @@ if __name__ == "__main__":
 
         # make one dataset for labels with custom dtype
         nan_value = float(global_f[ptid + "/raw"].attrs["invalidValue"][0])
-        dt = np.dtype([(col, df[col].to_numpy().dtype) for col in df.columns])
         df = df.fillna(value=nan_value)
         arr = df.to_records(index=False)
-        global_f[ptid].create_dataset("labels", data=arr, dtype=arr.dtype)
+        pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
         global_f.attrs["invalid_val"] = nan_value
         
         # remove if I have no targets
@@ -57,18 +75,26 @@ if __name__ == "__main__":
         all_null = pd.isnull(df).all(axis=0)
         if all_null.sum() > 0:
             print(ptid + " has no targets")
-            del global_f[ptid]
+            del pt_group
+            continue
         else:
             counter += 1 # TBD
 
+        # create continuous time array for all raw data
+        processed = pt_group.create_group("processed")
+        continuous_time_process(pt_group, "waves")
+        continuous_time_process(pt_group, "numerics")
+
+        
         
 
+
+        # compare continuous time arrays with each other and with labels
+        # create a continuous time array for labels with missing times filled as simple NAs
 
 
         # if ptid == "1002":
         #     print(list(global_f.attrs.items()))
-
-    print(counter)
 
 
     # continuous time and length comparisons

@@ -72,44 +72,54 @@ def build_continuous_time(f, variable_path):
     # input: file and name of series
     # return: continuous time array and values array with nans in gaps
     index = pd.DataFrame(f[variable_path].attrs["index"])
-    step_size = (
-        index["frequency"] * 1e6
-    )  # according to sampling frequency, converts to microseconds
-    segment_end_times = index["starttime"] + index["length"] * step_size
-    gaps_start_times = segment_end_times[:-1].reset_index(drop=True)
-    gaps_end_times = index["starttime"][1:].reset_index(drop=True)
-    gaps_length = gaps_end_times - gaps_start_times
+    freq = index["frequency"].to_numpy()
+    length = index["length"].to_numpy()
+    starttime = index["starttime"].to_numpy()
+    
+    # print(index)
+    time_blocks = []
+    # print(length.sum())
+    # print(f[variable_path][...].shape)
+    for i in range(index.shape[0]):
+        # split time interval into a grid that is based on the frequency
+        grid_step = (1/freq[i]) * 1e6 # how many microseconds per grid step per segment
 
-    # need a index, time in unix dataframe
-    gaps_length = gaps_length / step_size[:-1].reset_index(drop=True)
-    time = np.arange(0, int(gaps_length.sum().item() + f[variable_path][:].shape[0]))
-    print(time.shape)
+        # segments data
+        seg_length = length[i]
+        block_segment = np.empty((seg_length, 2))
+        # print("segment:", block_segment.shape)
 
-    # mask for gap or not gap
-    start_end = pd.DataFrame(
-        {
-            "start": (gaps_start_times - index["starttime"].iloc[0].item())
-            / step_size[:-1].reset_index(drop=True),
-            "end": (gaps_end_times - index["starttime"].iloc[0].item())
-            / step_size[:-1].reset_index(drop=True),
-        }
-    )
-    index["zero_start"] = round(
-        (index["starttime"] - index["starttime"].iloc[0].item()) / step_size
-    )
-    mask = np.ones(time.shape[0], dtype=bool)
-    # check if time is in any gap
-    for i in range(start_end.shape[0]):
-        mask[
-            int(start_end["start"].iloc[i].item()) : int(
-                start_end["end"].iloc[i].item()
-            )
-        ] = False
-    print(mask.sum() == f[variable_path][:].shape[0])
+        if i > 0:
+            seg_start = starttime[i] - starttime[0]
+            block_segment[:, 0] = np.arange(seg_start, seg_length * grid_step + seg_start, grid_step)
+            first_token = length[:i].sum().item()
+            block_segment[:, 1] = f[variable_path][first_token:first_token + length[i]]
+        else:
+            block_segment[:, 0] = np.arange(0, seg_length * grid_step, grid_step)
+            block_segment[:, 1] = f[variable_path][:length[i]]
 
-    # fill gaps with nans and not gaps with values
-    values = np.empty(time.shape[0])
-    values[:] = np.nan
-    values[mask] = f[variable_path][:]
-    df = pd.DataFrame(values, index=time)
+        time_blocks.append(block_segment)
+
+        # gaps data
+        if i != index.shape[0] - 1:
+            gap_length = int((starttime[i+1] - (starttime[i] + seg_length * grid_step)) // grid_step)
+            if gap_length < 0:
+                print("negative gap length. This is a problem.")
+            else:
+                block_segment = np.empty((gap_length, 2))
+                # print("gap:", block_segment.shape)
+
+        
+                gap_start = length[i] * grid_step + starttime[i] - starttime[0]
+                block_segment[:, 0] = np.arange(gap_start, grid_step * gap_length + gap_start, grid_step)
+                block_segment[:, 1] = np.nan
+
+                time_blocks.append(block_segment)
+
+
+    time = np.concatenate(time_blocks, axis = 0)
+    del time_blocks
+
+    df = pd.DataFrame(time[:, 1], index=time[:, 0])
+
     return df
