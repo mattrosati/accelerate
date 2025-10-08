@@ -20,14 +20,19 @@ from constants import TARGETS
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="Extract information about status within limits for each patient.")
+    parser = ArgumentParser(
+        description="Extract information about status within limits for each patient."
+    )
 
     parser.add_argument("data_file", help="Path to combined dataset")
-    parser.add_argument("-m", "--mode", help="Specify way to calculate status in autoregulation",
-    type=str,
-    choices=["before", "after", "within"],
-    required=True
-)
+    parser.add_argument(
+        "-m",
+        "--mode",
+        help="Specify way to calculate status in autoregulation",
+        type=str,
+        choices=["before", "after", "within"],
+        required=True,
+    )
     args = parser.parse_args()
 
     np.random.seed(420)

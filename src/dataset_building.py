@@ -14,20 +14,21 @@ from tqdm import tqdm
 from data_utils import build_continuous_time, load_label
 from constants import TARGETS
 
+
 def continuous_time_process(hdf_obj, group):
     processed = hdf_obj["processed"]
 
     for i in hdf_obj[f"raw/{group}"].keys():
         cont = build_continuous_time(hdf_obj, f"raw/{group}/{i}")
         arr = cont.reset_index().to_numpy()
-        processed.create_dataset(i, data = arr, dtype=arr.dtype)
+        processed.create_dataset(i, data=arr, dtype=arr.dtype)
         attrs = pd.DataFrame(hdf_obj[f"raw/{group}/{i}"].attrs["index"])
         processed[i].attrs["index"] = hdf_obj[f"raw/{group}/{i}"].attrs["index"]
         # print(processed[i].attrs["start"], processed[i].attrs["end"])
         # print(arr.shape)
 
-
     return processed
+
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Building full dataset in input destination.")
@@ -52,7 +53,7 @@ if __name__ == "__main__":
             unique_ptid.add(p)
 
     # build external links to raw_data files and groups for labels
-    counter = 0 # TBD
+    counter = 0  # TBD
     for ptid in tqdm(list(unique_ptid)[:]):
         print(ptid)
         pt_group = global_f.create_group(ptid)
@@ -68,16 +69,18 @@ if __name__ == "__main__":
         arr = df.to_records(index=False)
         pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
         global_f.attrs["invalid_val"] = nan_value
-        
+
         # remove if I have no targets
-        df = pd.DataFrame(global_f[ptid + "/labels"][...])[TARGETS].replace(global_f.attrs["invalid_val"], np.nan)
+        df = pd.DataFrame(global_f[ptid + "/labels"][...])[TARGETS].replace(
+            global_f.attrs["invalid_val"], np.nan
+        )
         all_null = pd.isnull(df).all(axis=0)
         if all_null.sum() > 0:
             print(ptid + " has no targets")
             del pt_group
             continue
         else:
-            counter += 1 # TBD
+            counter += 1  # TBD
 
         # i don't think i actually need this
         # # create continuous time array for all raw data
@@ -102,19 +105,10 @@ if __name__ == "__main__":
         #     pt_group["raw/numerics"].visititems(summarize_series)
         #     f["raw/waves"].visititems(summarize_series)
 
-        
-        
-
-
         # compare continuous time arrays with each other and with labels
         # create a continuous time array for labels with missing times filled as simple NAs
-
 
         # if ptid == "1002":
         #     print(list(global_f.attrs.items()))
 
-
     # continuous time and length comparisons
-
-
-

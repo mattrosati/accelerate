@@ -59,7 +59,9 @@ def load_label(patient_id, labels_path, time="seconds"):
 def find_time_elapsed(ptid, calc, path, time="seconds"):
     df = load_label(ptid, labels_path=path)
 
-    df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0]) // 1e6).astype("int32")
+    df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0]) // 1e6).astype(
+        "int32"
+    )
     df.set_index(df[f"elapsed_{time}"], inplace=True)
     try:
         return df[calc][df[calc].notna().all(axis=1)].index[0]
@@ -75,14 +77,16 @@ def build_continuous_time(f, variable_path):
     freq = index["frequency"].to_numpy()
     length = index["length"].to_numpy()
     starttime = index["starttime"].to_numpy()
-    
+
     # print(index)
     time_blocks = []
     # print(length.sum())
     # print(f[variable_path][...].shape)
     for i in range(index.shape[0]):
         # split time interval into a grid that is based on the frequency
-        grid_step = (1/freq[i]) * 1e6 # how many microseconds per grid step per segment
+        grid_step = (
+            1 / freq[i]
+        ) * 1e6  # how many microseconds per grid step per segment
 
         # segments data
         seg_length = length[i]
@@ -91,33 +95,40 @@ def build_continuous_time(f, variable_path):
 
         if i > 0:
             seg_start = starttime[i] - starttime[0]
-            block_segment[:, 0] = np.arange(seg_start, seg_length * grid_step + seg_start, grid_step)
+            block_segment[:, 0] = np.arange(
+                seg_start, seg_length * grid_step + seg_start, grid_step
+            )
             first_token = length[:i].sum().item()
-            block_segment[:, 1] = f[variable_path][first_token:first_token + length[i]]
+            block_segment[:, 1] = f[variable_path][
+                first_token : first_token + length[i]
+            ]
         else:
             block_segment[:, 0] = np.arange(0, seg_length * grid_step, grid_step)
-            block_segment[:, 1] = f[variable_path][:length[i]]
+            block_segment[:, 1] = f[variable_path][: length[i]]
 
         time_blocks.append(block_segment)
 
         # gaps data
         if i != index.shape[0] - 1:
-            gap_length = int((starttime[i+1] - (starttime[i] + seg_length * grid_step)) // grid_step)
+            gap_length = int(
+                (starttime[i + 1] - (starttime[i] + seg_length * grid_step))
+                // grid_step
+            )
             if gap_length < 0:
                 print("negative gap length. This is a problem.")
             else:
                 block_segment = np.empty((gap_length, 2))
                 # print("gap:", block_segment.shape)
 
-        
                 gap_start = length[i] * grid_step + starttime[i] - starttime[0]
-                block_segment[:, 0] = np.arange(gap_start, grid_step * gap_length + gap_start, grid_step)
+                block_segment[:, 0] = np.arange(
+                    gap_start, grid_step * gap_length + gap_start, grid_step
+                )
                 block_segment[:, 1] = np.nan
 
                 time_blocks.append(block_segment)
 
-
-    time = np.concatenate(time_blocks, axis = 0)
+    time = np.concatenate(time_blocks, axis=0)
     del time_blocks
 
     df = pd.DataFrame(time[:, 1], index=time[:, 0])
