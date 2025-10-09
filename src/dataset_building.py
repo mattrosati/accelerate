@@ -52,12 +52,13 @@ if __name__ == "__main__":
     except:
         pass
 
-
     # make destination h5py file
     global_f = h5py.File(os.path.join(args.destination, "all_data.hdf5"), "w")
 
     # count raw data files
-    raw_files = [f.split(".")[0] for f in os.listdir(args.raw_dir) if f.endswith(".icmh5")]
+    raw_files = [
+        f.split(".")[0] for f in os.listdir(args.raw_dir) if f.endswith(".icmh5")
+    ]
     print("Number of raw data files:", len(raw_files))
 
     # count patients with multiple files
@@ -69,16 +70,27 @@ if __name__ == "__main__":
                 multiple_files[mult] += 1
             else:
                 multiple_files[mult] = 0
-    multiple_files = {p : i for p, i in multiple_files.items() if i > 0}
-    print(f"Patients with multiple files (n = {len(multiple_files.keys())}) with {np.array(list(multiple_files.values())).sum()} extra files:", list(multiple_files.keys()))
-    print(f"Number of unique patients with raw data files:", len(raw_files) - np.array(list(multiple_files.values())).sum())
+    multiple_files = {p: i for p, i in multiple_files.items() if i > 0}
+    print(
+        f"Patients with multiple files (n = {len(multiple_files.keys())}) with {np.array(list(multiple_files.values())).sum()} extra files:",
+        list(multiple_files.keys()),
+    )
+    print(
+        f"Number of unique patients with raw data files:",
+        len(raw_files) - np.array(list(multiple_files.values())).sum(),
+    )
 
     # create unique set of overlapping ptids in labels and raw_data
-    label_files = [f.split("_")[0] for f in os.listdir(args.labels_dir) if f.endswith(".csv")]
+    label_files = [
+        f.split("_")[0] for f in os.listdir(args.labels_dir) if f.endswith(".csv")
+    ]
     raw_files_ids = [f.split("_")[0] if "_" in f else f for f in raw_files]
     unique_ptid = set(label_files).intersection(set(raw_files_ids))
 
-    print(f"- Patients without label files n = {len(set(raw_files_ids).difference(set(label_files)))}:", list(set(raw_files_ids).difference(set(label_files))))
+    print(
+        f"- Patients without label files n = {len(set(raw_files_ids).difference(set(label_files)))}:",
+        list(set(raw_files_ids).difference(set(label_files))),
+    )
     print("Number of Patients with label and raw data:", len(unique_ptid))
 
     # build external links to raw_data files and groups for labels
@@ -102,7 +114,9 @@ if __name__ == "__main__":
         df = load_label(ptid, args.labels_dir)
 
         # make one dataset for labels with custom dtype
-        nan_value = (lambda x: float(x[ptid + "/raw"].attrs["invalidValue"][0]))(global_f)
+        nan_value = (lambda x: float(x[ptid + "/raw"].attrs["invalidValue"][0]))(
+            global_f
+        )
         df = df.fillna(value=nan_value)
         arr = df.to_records(index=False)
         pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
@@ -161,7 +175,14 @@ if __name__ == "__main__":
     # continuous time and length comparisons
     print("Successful build of global dataset.\n")
 
-    print(f"Patients without calculated target data (n = {len(no_targets)}):", no_targets)
+    print(
+        f"Patients without calculated target data (n = {len(no_targets)}):", no_targets
+    )
     print("Included Number of Patients:", len(global_f.keys()))
-    broken_numerics = [i for i in global_f if global_f[i]["processed"].attrs["broken_numeric"]]
-    print(f"- Subset with broken numeric data (n = {len(broken_numerics)}):", broken_numerics)
+    broken_numerics = [
+        i for i in global_f if global_f[i]["processed"].attrs["broken_numeric"]
+    ]
+    print(
+        f"- Subset with broken numeric data (n = {len(broken_numerics)}):",
+        broken_numerics,
+    )

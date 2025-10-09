@@ -26,6 +26,7 @@ from process_utils import get_window_params, get_window
 PERCENT_IN_MIN = 0.5
 OUTSIDE_SECONDS = 60
 
+
 def extract_proportions(windows, labels, percentage=0.5):
 
     in_out = np.empty(shape=len(windows), dtype=bool)
@@ -52,17 +53,18 @@ def extract_proportions(windows, labels, percentage=0.5):
             in_out[i] = np.nan
             # write na
         else:
-            in_out[i] = (proportion_in > proportion_out)
-    
-    return in_out    
+            in_out[i] = proportion_in > proportion_out
+
+    return in_out
+
 
 def extractor(ptid, file_path, window_index, window_s):
     with h5py.File(file_path, "r") as f:
-        #load labels[targets] and abp
+        # load labels[targets] and abp
         labels = pd.DataFrame(f[f"{ptid}/labels"][...][TARGETS + ["DateTime"]])
         abp = f[f"{ptid}/raw/waves/abp"][...]
         abp_index = pd.DataFrame(f[f"{ptid}/raw/waves/abp"].attrs["index"])
-        
+
         # replace invalid vals and filter out
         invalid_val = f.attrs["invalid_val"]
         labels.replace(invalid_val, np.nan, inplace=True)
@@ -75,35 +77,43 @@ def extractor(ptid, file_path, window_index, window_s):
 
         # build empty dataset same rows as labels
         data = {}
-        in_out = np.empty(shape = labels.shape[0])
-        start_end = np.empty(shape = (labels.shape[0], 2))
+        in_out = np.empty(shape=labels.shape[0])
+        start_end = np.empty(shape=(labels.shape[0], 2))
 
         # convert index to segments start and end times
-        abp_index["endtime"] = abp_index['starttime'] + (abp_index['length'] / abp_index['frequency'] * 1e6).astype(np.int64)
-        
+        abp_index["endtime"] = abp_index["starttime"] + (
+            abp_index["length"] / abp_index["frequency"] * 1e6
+        ).astype(np.int64)
+
         # select label timepoints in segments
-        seg_start = abp_index['starttime'].to_numpy()[:, None]
+        seg_start = abp_index["starttime"].to_numpy()[:, None]
         seg_end = abp_index["endtime"].to_numpy()[:, None]
-        in_segment = (labels["DateTime"].to_numpy() < seg_end) & (labels["DateTime"].to_numpy() >= seg_start) # (n_seg, data_points)
-        mask = np.any(in_segment, axis=0) # (data_points, 1)
+        in_segment = (labels["DateTime"].to_numpy() < seg_end) & (
+            labels["DateTime"].to_numpy() >= seg_start
+        )  # (n_seg, data_points)
+        mask = np.any(in_segment, axis=0)  # (data_points, 1)
 
         # find segment for each timestamp
         first_idx = np.argmax(in_segment, axis=0)
-        
+
         labels["segment"] = pd.Series(first_idx, index=labels.index)
         labels = labels[mask]
 
         # select out the windows
-        df, labels = get_window(abp, abp_index, labels, window_index, window_s, percentage=PERCENT_IN_MIN)
+        df, labels = get_window(
+            abp, abp_index, labels, window_index, window_s, percentage=PERCENT_IN_MIN
+        )
 
         # extract window data
-        windows = [{"w" : abp[i[0]:i[1]], "overlap_len" : i[2], "total_length" : i[3]} for i in df]
+        windows = [
+            {"w": abp[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
+            for i in df
+        ]
 
         # extract proportion_in T/F database
         in_out = extract_proportions(windows, labels, percentage=PERCENT_IN_MIN)
 
         return in_out, df
-
 
 
 def main(ptid, file_path, mode, temp_dir_path):
@@ -117,12 +127,18 @@ def main(ptid, file_path, mode, temp_dir_path):
     temp_ptid_path = os.path.join(temp_dir_path, f"{ptid}.h5")
 
     with h5py.File(temp_ptid_path, "w") as f:
-        f.attrs['idx_unit'] = "token"
-        f.attrs['len_unit'] = "token"
+        f.attrs["idx_unit"] = "token"
+        f.attrs["len_unit"] = "token"
         f.create_dataset("in_out", data=data.astype(np.int8), dtype=np.int8)
-        f.create_dataset("window_idx", data=windows[:, :2].astype(np.int64), dtype=np.int64)
-        f.create_dataset("overlap_len", data=windows[:, 2].astype(np.int64), dtype=np.int64)
-        f.create_dataset("total_len", data=windows[:, 3].astype(np.int64), dtype=np.int64)
+        f.create_dataset(
+            "window_idx", data=windows[:, :2].astype(np.int64), dtype=np.int64
+        )
+        f.create_dataset(
+            "overlap_len", data=windows[:, 2].astype(np.int64), dtype=np.int64
+        )
+        f.create_dataset(
+            "total_len", data=windows[:, 3].astype(np.int64), dtype=np.int64
+        )
 
     return None
 
@@ -158,11 +174,9 @@ if __name__ == "__main__":
         ptids = list(f.keys())
 
     # will do everything and write to file in temp_dir
-    func = partial(main, 
-                file_path = args.data_file,
-                mode = args.mode,
-                temp_dir_path = args.temp_dir
-            )
+    func = partial(
+        main, file_path=args.data_file, mode=args.mode, temp_dir_path=args.temp_dir
+    )
     results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 
     # loop through temp_dir and add to main dataset
@@ -176,8 +190,6 @@ if __name__ == "__main__":
                 if target_name in dest_group:
                     del dest_group[target_name]
                 tmp.copy(source=tmp, dest=dest_group, name=target_name)
-
-
 
 
 #     futures = [ex.submit(process_feature, feat) for feat in features]

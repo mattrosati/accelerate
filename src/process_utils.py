@@ -8,26 +8,37 @@ import pandas as pd
 
 def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     # compute closest idx for data that matches coords
-    seg_start = index['starttime'].iloc[coords["segment"]].to_numpy()
-    seg_end = index['endtime'].iloc[coords["segment"]].to_numpy()
-    seg_freq = index['frequency'].iloc[coords["segment"]].to_numpy()
-    tokens_from_seg_start = ((coords['DateTime'].to_numpy() - seg_start) / (1e6 * (1/seg_freq))).round().astype(np.int64)
-    closest_idx = index['startidx'].iloc[coords["segment"]].to_numpy() + tokens_from_seg_start
+    seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()
+    seg_end = index["endtime"].iloc[coords["segment"]].to_numpy()
+    seg_freq = index["frequency"].iloc[coords["segment"]].to_numpy()
+    tokens_from_seg_start = (
+        ((coords["DateTime"].to_numpy() - seg_start) / (1e6 * (1 / seg_freq)))
+        .round()
+        .astype(np.int64)
+    )
+    closest_idx = (
+        index["startidx"].iloc[coords["segment"]].to_numpy() + tokens_from_seg_start
+    )
     assert seg_start.shape == coords["segment"].shape
 
-    # get position of window bounds in absolute time to check if outside segments 
+    # get position of window bounds in absolute time to check if outside segments
     window_us = window_s * 1e6
     window_index_us = (window_index + 1) * 1e6
-    window_start = coords['DateTime'].to_numpy() - float(window_index_us)
-    window_end = coords['DateTime'].to_numpy() + (window_us - window_index_us)
+    window_start = coords["DateTime"].to_numpy() - float(window_index_us)
+    window_end = coords["DateTime"].to_numpy() + (window_us - window_index_us)
     window_length = window_end - window_start
-    total_window_token_length = (window_length / (1e6 * (1/seg_freq))).round().astype(np.int64)
-
+    total_window_token_length = (
+        (window_length / (1e6 * (1 / seg_freq))).round().astype(np.int64)
+    )
 
     # check whether overlapping with gap
     # shape (n_seg, n_windows)
-    overlap_start = np.clip(seg_start - window_start, a_min=0, a_max=None) # pos only if window overlaps with seg start, clips to zero if no overlap
-    overlap_end   = np.clip(window_end - seg_end, a_min=0, a_max=None) # pos only if window overlaps with seg end, clips to zero if no overlap
+    overlap_start = np.clip(
+        seg_start - window_start, a_min=0, a_max=None
+    )  # pos only if window overlaps with seg start, clips to zero if no overlap
+    overlap_end = np.clip(
+        window_end - seg_end, a_min=0, a_max=None
+    )  # pos only if window overlaps with seg end, clips to zero if no overlap
 
     # overlap length per (segment, window)
     overlap_len = overlap_end + overlap_start
@@ -44,18 +55,36 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     seg_freq = seg_freq[~mask]
     overlap_len = overlap_len[~mask]
     total_window_token_length = total_window_token_length[~mask]
-    
+
     # extract abp windows, add na if in gap
     # window params
     window_start_clipped = np.maximum(seg_start, window_start)
     window_end_clipped = np.minimum(seg_end, window_end)
-    window_start_tokens = ((window_start_clipped - seg_start) / (1e6 * (1/seg_freq))).round().astype(np.int64)
-    window_end_tokens = ((window_end_clipped - seg_start) / (1e6 * (1/seg_freq))).round().astype(np.int64)
+    window_start_tokens = (
+        ((window_start_clipped - seg_start) / (1e6 * (1 / seg_freq)))
+        .round()
+        .astype(np.int64)
+    )
+    window_end_tokens = (
+        ((window_end_clipped - seg_start) / (1e6 * (1 / seg_freq)))
+        .round()
+        .astype(np.int64)
+    )
 
-    w_start_idx = index['startidx'].iloc[clean["segment"]].to_numpy() + window_start_tokens
-    w_end_idx = index['startidx'].iloc[clean["segment"]].to_numpy() + window_end_tokens
+    w_start_idx = (
+        index["startidx"].iloc[clean["segment"]].to_numpy() + window_start_tokens
+    )
+    w_end_idx = index["startidx"].iloc[clean["segment"]].to_numpy() + window_end_tokens
 
-    df = np.concatenate([w_start_idx[:, None], w_end_idx[:, None], overlap_len[:, None], total_window_token_length[:, None]], axis=1).astype(np.int64)
+    df = np.concatenate(
+        [
+            w_start_idx[:, None],
+            w_end_idx[:, None],
+            overlap_len[:, None],
+            total_window_token_length[:, None],
+        ],
+        axis=1,
+    ).astype(np.int64)
 
     return df, clean
 
@@ -69,5 +98,3 @@ def get_window_params(mode):
             return 0
         case "within":
             return OUTSIDE_SECONDS // 2 - 1
-
-
