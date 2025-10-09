@@ -4,6 +4,7 @@
 
 import os
 import sys
+import shutil
 from argparse import ArgumentParser
 
 import h5py
@@ -21,10 +22,20 @@ from filelock import FileLock
 
 from data_utils import build_continuous_time, load_label
 from constants import TARGETS, FEATURES
-from process_utils import get_window_params, get_window
+from process_utils import get_window
 
 PERCENT_IN_MIN = 0.5
 OUTSIDE_SECONDS = 60
+
+def get_window_params(mode):
+    # unpack mode into parameters to feed extractor
+    match mode:
+        case "before":
+            return OUTSIDE_SECONDS - 1
+        case "after":
+            return 0
+        case "within":
+            return OUTSIDE_SECONDS // 2 - 1
 
 
 def extract_proportions(windows, labels, percentage=0.5):
@@ -158,8 +169,20 @@ if __name__ == "__main__":
         "--mode",
         help="Specify way to calculate status in autoregulation",
         type=str,
-        choices=["before", "after", "within"],
+        choices=["before", "after", "within", "mean"],
         required=True,
+    )
+    parser.add_argument(
+        "-e",
+        "--exclusive",
+        help="Deletes processed data that uses strategies that are not the input strategy.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        help="Does not delete temporary dir for debugging purposes.",
+        action="store_true",
     )
 
     args = parser.parse_args()
@@ -190,6 +213,18 @@ if __name__ == "__main__":
                 if target_name in dest_group:
                     del dest_group[target_name]
                 tmp.copy(source=tmp, dest=dest_group, name=target_name)
+
+                # delete all other processings if we specify
+                if args.exclusive:
+                    for k in dest_group.keys():
+                        if "in_out_" in k and k != target_name:
+                            del dest_group[k]
+
+    # delete temp_dir
+    if not args.debug:
+        shutil.rmtree(args.temp_dir)
+
+
 
 
 #     futures = [ex.submit(process_feature, feat) for feat in features]

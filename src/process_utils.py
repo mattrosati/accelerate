@@ -88,12 +88,4 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     return df, clean
 
 
-def get_window_params(mode):
-    # unpack mode into parameters to feed extractor
-    match mode:
-        case "before":
-            return OUTSIDE_SECONDS - 1
-        case "after":
-            return 0
-        case "within":
-            return OUTSIDE_SECONDS // 2 - 1
+# TODO: needs a window combiner for when I will ask it to do more than one var
