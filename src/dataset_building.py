@@ -101,6 +101,7 @@ if __name__ == "__main__":
     # build external links to raw_data files and groups for labels
     print("\nBuilding global dataset...")
     no_targets = []
+    broken_abp = []
     for ptid in tqdm(list(unique_ptid)[:]):
         if tmp.get(ptid) == 0:
             assert len([f for f in raw_files if f.startswith(ptid + "_")]) == 1
@@ -109,6 +110,14 @@ if __name__ == "__main__":
         pt_group = global_f.require_group(ptid)
         raw_f = os.path.join("../raw_data/", ptid + ".icmh5")
         global_f[ptid]["raw"] = h5py.ExternalLink(raw_f, "/")
+
+        # some files do not have abp, I need to remove
+        try:
+            assert pt_group[f"raw/waves/abp"][0] is not None
+        except:
+            broken_abp.append(ptid)
+            del global_f[ptid]
+            continue
 
         # now for labels
         strip_ptid = ptid.split("_")[0]
@@ -151,14 +160,6 @@ if __name__ == "__main__":
         except:
             pt_group["processed"].attrs["broken_numeric"] = True
 
-        # some files do not have abp, I need a label that tells me that is the case
-        try:
-            assert pt_group[f"raw/waves/abp"][0] is not None
-            pt_group["processed"].attrs["broken_abp"] = False
-            continue
-        except:
-            pt_group["processed"].attrs["broken_abp"] = True
-
         # i don't think i actually need this
         # # create continuous time array for all raw data
         # processed = pt_group.require_group("processed")
@@ -195,6 +196,10 @@ if __name__ == "__main__":
         f"Patients without calculated target data (n = {len(no_targets)}):", no_targets
     )
     print(
+        f"Files with absent abp data (n = {len(broken_abp)}):",
+        broken_abp,
+    )
+    print(
         f"Total: n = { len(set([f.split('_')[0] for f in global_f.keys()])) } patients over n = { len(global_f.keys()) } files."
     )
     
@@ -202,15 +207,9 @@ if __name__ == "__main__":
     broken_numerics = [
         i for i in global_f if global_f[i]["processed"].attrs["broken_numeric"]
     ]
-    broken_abp = [
-        i for i in global_f if global_f[i]["processed"].attrs["broken_abp"]
-    ]
     print(
         f"- Subset with broken numeric data (n = {len(broken_numerics)}):",
         broken_numerics,
     )
 
-    print(
-        f"- Subset with absent abp data (n = {len(broken_abp)}):",
-        broken_abp,
-    )
+
