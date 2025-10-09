@@ -25,21 +25,42 @@ from constants import TARGETS, FEATURES
 from process_utils import get_window
 
 PERCENT_IN_MIN = 0.5
-OUTSIDE_SECONDS = 60
+WINDOW_SECONDS = 60
 
 def get_window_params(mode):
     # unpack mode into parameters to feed extractor
     match mode:
         case "before":
-            return OUTSIDE_SECONDS - 1
+            return WINDOW_SECONDS - 1
         case "after":
             return 0
         case "within":
-            return OUTSIDE_SECONDS // 2 - 1
+            return WINDOW_SECONDS // 2 - 1
+        case "mean":
+            return WINDOW_SECONDS - 1
 
 
-def extract_proportions(windows, labels, percentage=0.5):
+def extract_proportions(windows, labels, percentage=0.5, strategy="count"):
+    if strategy == "count":
+        return extract_proportions_count(windows, labels, percentage)
+    elif strategy == "mean":
+        return extract_proportions_mean(windows, labels)
 
+def extract_proportions_mean(windows, labels):
+    in_out = np.empty(shape=len(windows), dtype=bool)
+    for i, w in enumerate(windows):
+        lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
+        upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
+
+        w_vector = w["w"]
+
+        # find average of window
+        w_mean = np.mean(w_vector)
+        in_out[i] = (w_mean > lower_limit) and (w_mean < upper_limit)
+
+    return in_out
+
+def extract_proportions_count(windows, labels, percentage=0.5):
     in_out = np.empty(shape=len(windows), dtype=bool)
     for i, w in enumerate(windows):
         lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
@@ -69,7 +90,10 @@ def extract_proportions(windows, labels, percentage=0.5):
     return in_out
 
 
-def extractor(ptid, file_path, window_index, window_s):
+def extractor(ptid, file_path, window_index, window_s, strategy="count"):
+    # if finding the mean, do not allow any windows that go over gaps
+    percentage = 0.0 if strategy == "mean" else PERCENT_IN_MIN
+
     with h5py.File(file_path, "r") as f:
         # load labels[targets] and abp
         labels = pd.DataFrame(f[f"{ptid}/labels"][...][TARGETS + ["DateTime"]])
@@ -112,7 +136,7 @@ def extractor(ptid, file_path, window_index, window_s):
 
         # select out the windows
         df, labels = get_window(
-            abp, abp_index, labels, window_index, window_s, percentage=PERCENT_IN_MIN
+            abp, abp_index, labels, window_index, window_s, percentage=percentage
         )
 
         # extract window data
@@ -122,17 +146,18 @@ def extractor(ptid, file_path, window_index, window_s):
         ]
 
         # extract proportion_in T/F database
-        in_out = extract_proportions(windows, labels, percentage=PERCENT_IN_MIN)
+        in_out = extract_proportions(windows, labels, percentage=percentage, strategy=strategy)
 
         return in_out, df
 
 
 def main(ptid, file_path, mode, temp_dir_path):
 
-    window_index, window_s = get_window_params(mode), OUTSIDE_SECONDS
+    window_index, window_s = get_window_params(mode), WINDOW_SECONDS
+    strategy = "mean" if mode == "mean" else "count"
 
     # extract data
-    data, windows = extractor(ptid, file_path, window_index, window_s)
+    data, windows = extractor(ptid, file_path, window_index, window_s, strategy)
 
     # writes data in defined directory
     temp_ptid_path = os.path.join(temp_dir_path, f"{ptid}.h5")
