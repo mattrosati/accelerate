@@ -5,6 +5,3 @@ TARGETS = [
 ]
 
 FEATURES = ["hr", "rso2r", "rso2l", "spo2", "abp"]
-
-
-OUTSIDE_SECONDS = 60
