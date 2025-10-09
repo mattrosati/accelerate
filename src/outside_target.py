@@ -17,9 +17,43 @@ from tqdm import tqdm
 
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from filelock import FileLock
 
 from data_utils import build_continuous_time, load_label
 from constants import TARGETS, FEATURES
+
+
+
+def extractor(ptid, file_path, mode):
+    with h5py.File(file_path, "r") as f:
+        #load labels[targets] and abp
+
+        # build empty dataset same rows as labels
+
+
+        # using .map or .apply, loop through each label timepoint
+
+            # compute abp indexes according to modality 
+
+            # check whether overlapping with gap
+            
+            # if (proportion in - proportion out) > proportion gap
+                # evaluate whether to write True or False
+                # attach (start, end) to use later if we want to extract actual data vectors
+            # check
+
+
+
+def main(ptid, file_path, mode):
+    # extract data
+    data = extractor(ptid, file_path, mode)
+
+    # write data
+    with FileLock(file_path + ".lock"):
+        with h5py.File(file_path, "r+") as f:
+            grp = f["{ptid}/processed"]
+            grp.require_dataset("in_out", data=data["status"], dtype=data.dtype)
+            grp.require_dataset("in_out_indeces", data=data[["start", "end"]], dtype=data.dtype)
 
 
 if __name__ == "__main__":
@@ -50,16 +84,21 @@ if __name__ == "__main__":
     with h5py.File(args.data_file, "r") as f:
         ptids = list(global_f.keys())
 
-    with ProcessPoolExecutor(max_workers=8) as ex:
+    # will do everything and write to file
+    with ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
+        func = partial(main, 
+                    file_path = args.data_file,
+                    mode = args.mode 
+                )
+        
         results = list(
             tqdm(
-                ex.map(
-                    partial(func_TBD),
-                    ptids,
+                ex.map(func, ptids), 
+                total=ptids,
                 )
-            )
         )
 
-    distributions = dict(results)
 
-    pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
+#     futures = [ex.submit(process_feature, feat) for feat in features]
+# for fut in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+#     feature, result = fut.result()
