@@ -5,7 +5,6 @@ import h5py
 import numpy as np
 import pandas as pd
 
-
 def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     # compute closest idx for data that matches coords
     seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()

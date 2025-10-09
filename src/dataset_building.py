@@ -11,11 +11,8 @@ import seaborn as sns
 
 from tqdm import tqdm
 
-from data_utils import build_continuous_time, load_label
+from data_utils import build_continuous_time, load_label, printname
 from constants import TARGETS
-
-# TODO: make a wrapper to account for the possibility that you could get "parts/raw" instead of just "raw"
-# needs to be both a get_scalar and a get_df/get_group method
 
 
 def continuous_time_process(hdf_obj, group):
@@ -105,8 +102,11 @@ if __name__ == "__main__":
             mult_file_ids = [f for f in raw_files if f.startswith(ptid)]
             print(mult_file_ids)
             for i, n in enumerate(mult_file_ids):
-                global_f[ptid].require_group("part_" + str(i))
-                global_f[ptid]["part_" + str(i)]["raw"] = h5py.ExternalLink(raw_f, "/")
+                raw_f = os.path.join("../raw_data/", n + ".icmh5")
+                global_f[ptid].require_group("raw")
+                global_f[ptid]["raw"]["part_" + str(i+1)] = h5py.ExternalLink(raw_f, "/")
+                global_f[ptid]["raw"]["part_" + str(i+1)].visit(printname)
+            print(list(global_f[ptid]["raw"].keys()))
         else:
             global_f[ptid]["raw"] = h5py.ExternalLink(raw_f, "/")
 
@@ -114,9 +114,7 @@ if __name__ == "__main__":
         df = load_label(ptid, args.labels_dir)
 
         # make one dataset for labels with custom dtype
-        nan_value = (lambda x: float(x[ptid + "/raw"].attrs["invalidValue"][0]))(
-            global_f
-        )
+        nan_value = float(global_f[ptid + "/raw"].attrs["invalidValue"][0])
         df = df.fillna(value=nan_value)
         arr = df.to_records(index=False)
         pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
