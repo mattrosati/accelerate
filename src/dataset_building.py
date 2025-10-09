@@ -67,7 +67,10 @@ if __name__ == "__main__":
                 multiple_files[mult] += 1
             else:
                 multiple_files[mult] = 0
+    
+    tmp = multiple_files.copy()
     multiple_files = {p: i for p, i in multiple_files.items() if i > 0}
+
     print(
         f"Patients with multiple files (n = {len(multiple_files.keys())}) with {np.array(list(multiple_files.values())).sum()} extra files:",
         list(multiple_files.keys()),
@@ -90,28 +93,44 @@ if __name__ == "__main__":
     )
     print("Number of Patients with label and raw data:", len(unique_ptid))
 
+    # re-add in pt ids with parts
+    for mult_ptid in multiple_files.keys():
+       unique_ptid.discard(mult_ptid) 
+       unique_ptid = unique_ptid.union({f"{m}_{i + 1}" for m, j in multiple_files.items() for i in range(j+1) })
+
     # build external links to raw_data files and groups for labels
     print("\nBuilding global dataset...")
     no_targets = []
     for ptid in tqdm(list(unique_ptid)[:]):
+        if tmp.get(ptid) == 0:
+            assert len([f for f in raw_files if f.startswith(ptid + "_")]) == 1
+            ptid = [f for f in raw_files if f.startswith(ptid + "_")][0]
 
-        # check if this patient has multiple files, include a "part_n" group if so
-        raw_f = os.path.join("../raw_data/", ptid + ".icmh5")
         pt_group = global_f.require_group(ptid)
-        if ptid in multiple_files:
-            mult_file_ids = [f for f in raw_files if f.startswith(ptid)]
-            print(mult_file_ids)
-            for i, n in enumerate(mult_file_ids):
-                raw_f = os.path.join("../raw_data/", n + ".icmh5")
-                global_f[ptid].require_group("raw")
-                global_f[ptid]["raw"]["part_" + str(i+1)] = h5py.ExternalLink(raw_f, "/")
-                global_f[ptid]["raw"]["part_" + str(i+1)].visit(printname)
-            print(list(global_f[ptid]["raw"].keys()))
-        else:
-            global_f[ptid]["raw"] = h5py.ExternalLink(raw_f, "/")
+        raw_f = os.path.join("../raw_data/", ptid + ".icmh5")
+        global_f[ptid]["raw"] = h5py.ExternalLink(raw_f, "/")
 
         # now for labels
-        df = load_label(ptid, args.labels_dir)
+        strip_ptid = ptid.split("_")[0]
+        df = load_label(strip_ptid, args.labels_dir)
+
+        # remove patient if no labels
+        all_null = pd.isnull(df).all(axis=0)
+        if all_null.sum() > 0:
+            del global_f[ptid]
+            no_targets.append(ptid)
+            continue
+
+        # check that labels actually overlap with raw recording time when recording has multiple parts
+        # delete if not
+        if "_" in ptid:
+            raw_start = int(global_f[ptid + "/raw"].attrs['dataStartTimeUnix'][0])
+            raw_end = int(global_f[ptid + "/raw"].attrs['dataEndTimeUnix'][0])
+            if (raw_end < df["DateTime"].iloc[0] / 1e6) or (raw_start > df["DateTime"].iloc[-1] / 1e6):
+                del global_f[ptid]
+                no_targets.append(ptid)
+                continue
+
 
         # make one dataset for labels with custom dtype
         nan_value = float(global_f[ptid + "/raw"].attrs["invalidValue"][0])
@@ -120,26 +139,25 @@ if __name__ == "__main__":
         pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
         global_f.attrs["invalid_val"] = nan_value
 
-        # remove if I have no targets
-        df = pd.DataFrame(global_f[ptid + "/labels"][...])[TARGETS].replace(
-            global_f.attrs["invalid_val"], np.nan
-        )
-        all_null = pd.isnull(df).all(axis=0)
-        if all_null.sum() > 0:
-            del global_f[ptid]
-            no_targets.append(ptid)
-            continue
+
 
         # prep a group for processed data
         processed = pt_group.require_group("processed")
 
         # some files have broken numeric data, I need a label that tells me that is the case
         try:
-            test = pt_group[f"raw/numerics/hr"][:]
+            assert len(pt_group[f"raw/numerics/hr"][...]) > 0
             pt_group["processed"].attrs["broken_numeric"] = False
-            continue
         except:
             pt_group["processed"].attrs["broken_numeric"] = True
+
+        # some files do not have abp, I need a label that tells me that is the case
+        try:
+            assert pt_group[f"raw/waves/abp"][0] is not None
+            pt_group["processed"].attrs["broken_abp"] = False
+            continue
+        except:
+            pt_group["processed"].attrs["broken_abp"] = True
 
         # i don't think i actually need this
         # # create continuous time array for all raw data
@@ -176,11 +194,23 @@ if __name__ == "__main__":
     print(
         f"Patients without calculated target data (n = {len(no_targets)}):", no_targets
     )
-    print("Included Number of Patients:", len(global_f.keys()))
+    print(
+        f"Total: n = { len(set([f.split('_')[0] for f in global_f.keys()])) } patients over n = { len(global_f.keys()) } files."
+    )
+    
+    
     broken_numerics = [
         i for i in global_f if global_f[i]["processed"].attrs["broken_numeric"]
+    ]
+    broken_abp = [
+        i for i in global_f if global_f[i]["processed"].attrs["broken_abp"]
     ]
     print(
         f"- Subset with broken numeric data (n = {len(broken_numerics)}):",
         broken_numerics,
+    )
+
+    print(
+        f"- Subset with absent abp data (n = {len(broken_abp)}):",
+        broken_abp,
     )
