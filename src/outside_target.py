@@ -30,8 +30,8 @@ WINDOW_SECONDS = 60
 # TODO: refactor to be tas kagnostic
 # TODO: refactor to add padding, then can do UMAPs!!!
 
-def get_window_params(mode):
-    # unpack mode into parameters to feed extractor
+def get_window_index(mode):
+    # according to mode, get index of time t of labels for the specific duration of the window
     match mode:
         case "before":
             return WINDOW_SECONDS - 1
@@ -56,6 +56,8 @@ def extract_proportions_mean(windows, labels):
         upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
 
         w_vector = w["w"]
+        if w["total_length"].sum() == 0:
+            print("Record with no windows, unclear why")
 
         # find average of window
         w_mean = np.mean(w_vector)
@@ -137,26 +139,32 @@ def extractor(ptid, file_path, window_index, window_s, strategy="count"):
         labels["segment"] = pd.Series(first_idx, index=labels.index)
         labels = labels[mask]
 
-        # select out the windows
-        df, labels = get_window(
-            abp, abp_index, labels, window_index, window_s, percentage=percentage
-        )
+        if labels.shape[0] != 0:
+            # select out the windows
+            df, labels = get_window(
+                abp, abp_index, labels, window_index, window_s, percentage=percentage
+            )
 
-        # extract window data
-        windows = [
-            {"w": abp[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
-            for i in df
-        ]
+            # extract window data
+            windows = [
+                {"w": abp[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
+                for i in df
+            ]
 
-        # extract proportion_in T/F database
-        in_out = extract_proportions(windows, labels, percentage=percentage, strategy=strategy)
+            # extract proportion_in T/F database
+            in_out = extract_proportions(windows, labels, percentage=percentage, strategy=strategy)
 
-        return in_out, df
+            df = np.concatenate([ df, np.array(labels["DateTime"])[:, np.newaxis] ], axis=1)
+
+            return in_out, df
+
+        else:
+            return None, None
 
 
 def main(ptid, file_path, mode, temp_dir_path):
 
-    window_index, window_s = get_window_params(mode), WINDOW_SECONDS
+    window_index, window_s = get_window_index(mode), WINDOW_SECONDS
     strategy = "mean" if mode == "mean" else "count"
 
     # extract data
@@ -166,6 +174,10 @@ def main(ptid, file_path, mode, temp_dir_path):
     temp_ptid_path = os.path.join(temp_dir_path, f"{ptid}.h5")
 
     with h5py.File(temp_ptid_path, "w") as f:
+        f.attrs["no_label_overlap"] = (data is None and windows is None)
+        if f.attrs["no_label_overlap"]:
+            print(ptid)
+            return None
         f.attrs["idx_unit"] = "token"
         f.attrs["len_unit"] = "token"
         f.create_dataset("in_out", data=data.astype(np.int8), dtype=np.int8)
@@ -177,6 +189,9 @@ def main(ptid, file_path, mode, temp_dir_path):
         )
         f.create_dataset(
             "total_len", data=windows[:, 3].astype(np.int64), dtype=np.int64
+        )
+        f.create_dataset(
+            "label_timestamp", data=windows[:, 4].astype(np.int64), dtype=np.int64
         )
 
     return None
