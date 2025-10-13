@@ -27,6 +27,9 @@ from process_utils import get_window
 PERCENT_IN_MIN = 0.5
 WINDOW_SECONDS = 60
 
+# TODO: refactor to be tas kagnostic
+# TODO: refactor to add padding, then can do UMAPs!!!
+
 def get_window_params(mode):
     # unpack mode into parameters to feed extractor
     match mode:

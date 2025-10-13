@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-def get_window(data, index, coords, window_index, window_s, percentage=0.5):
+def get_window(data, index, coords, window_index, window_s, percentage=0.5, pad=False):
     # compute closest idx for data that matches coords
     seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()
     seg_end = index["endtime"].iloc[coords["segment"]].to_numpy()
@@ -55,7 +55,7 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     overlap_len = overlap_len[~mask]
     total_window_token_length = total_window_token_length[~mask]
 
-    # extract abp windows, add na if in gap
+    # extract abp windows
     # window params
     window_start_clipped = np.maximum(seg_start, window_start)
     window_end_clipped = np.minimum(seg_end, window_end)
@@ -74,6 +74,11 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
         index["startidx"].iloc[clean["segment"]].to_numpy() + window_start_tokens
     )
     w_end_idx = index["startidx"].iloc[clean["segment"]].to_numpy() + window_end_tokens
+
+    # add padding if wanting to pad
+    if pad:
+        s_pad = np.maximum(seg_start - window_start, 0)
+        e_pad = np.maximum(window_end - seg_end, 0)
 
     df = np.concatenate(
         [
