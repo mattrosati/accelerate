@@ -1,11 +1,14 @@
 import os
 import sys
+import re
 
 import h5py
 import numpy as np
 import pandas as pd
 
 # pending useful sklearn imports
+
+conversion_factors = {'hr': (1/60/60), 'min': (1/60), 's': 1, 'ms': 1e3, 'us': 1e6}
 
 
 def printname(name):
@@ -39,6 +42,7 @@ def h5py_summarize(file_path):
 
 
 def load_label(patient_id, labels_path, time="us"):
+    patient_id = patient_id.split("_")[0] if "_" in patient_id else patient_id
     pt_file = f"{patient_id}_updated.csv"
     label_file = os.path.join(labels_path, pt_file)
     df = pd.read_csv(label_file)
@@ -47,22 +51,30 @@ def load_label(patient_id, labels_path, time="us"):
     df["DateTime"] = pd.to_datetime(df["DateTime"], unit="D", origin="1899-12-30")
     # df.set_index("DateTime", inplace=True)
 
-    factors = {'hr': (1/60/60), 'min': (1/60), 's': 1, 'ms': 1e3, 'us': 1e6}
-
     # use .timestamp to convert to UNIX seconds, round to closest second, then convert to unit = time
-    df['DateTime'] = df['DateTime'].apply(lambda x: x.timestamp()).round() * factors[time]
+    df['DateTime'] = df['DateTime'].apply(lambda x: x.timestamp()).round() * conversion_factors[time]
     return df
 
 
-def find_time_elapsed(ptid, calc, path, time):
+def find_time_elapsed(ptid, calc, path, start_time, time):
+    if re.search(r"_([2-9]+|1[0-9]+)", ptid):
+        print("Matched:", ptid)
+        return None
+
     df = load_label(ptid, labels_path=path, time=time)
 
-    df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0])).astype(
+    start_time = start_time * conversion_factors[time]
+
+    df[f"elapsed_{time}"] = ((df["DateTime"] - start_time)).astype(
         np.int64
     )
     df.set_index(df[f"elapsed_{time}"], inplace=True)
+
     try:
-        return df[calc][df[calc].notna().all(axis=1)].index[0]
+        time = df[calc][df[calc].notna().all(axis=1)].index[0]
+        if time < 0:
+            return None
+        return time
     except:
         print(f"No time found for {ptid}")
         return None
