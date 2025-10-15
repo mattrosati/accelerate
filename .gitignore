@@ -33,6 +33,11 @@ mlruns/
 *.err
 
 # -------------------
+# Old Transfer Directories
+# -------------------
+*_heritage/
+
+# -------------------
 # Deep Learning Artifacts
 # -------------------
 # Model checkpoints
