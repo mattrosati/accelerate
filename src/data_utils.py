@@ -38,7 +38,7 @@ def h5py_summarize(file_path):
     return
 
 
-def load_label(patient_id, labels_path, time="seconds"):
+def load_label(patient_id, labels_path, time="us"):
     pt_file = f"{patient_id}_updated.csv"
     label_file = os.path.join(labels_path, pt_file)
     df = pd.read_csv(label_file)
@@ -47,20 +47,18 @@ def load_label(patient_id, labels_path, time="seconds"):
     df["DateTime"] = pd.to_datetime(df["DateTime"], unit="D", origin="1899-12-30")
     # df.set_index("DateTime", inplace=True)
 
-    # add column for elapsed time from start in seconds
-    divisor = 1 if time == "seconds" else 60 if time == "minutes" else 3600
+    factors = {'hr': (1/60/60), 'min': (1/60), 's': 1, 'ms': 1e3, 'us': 1e6}
 
-    # converting datetime to microseconds unix time for interoperability with raw data
-    df["DateTime"] = (df["DateTime"].astype("int64") // 1000).round(-4)
-
+    # use .timestamp to convert to UNIX seconds, round to closest second, then convert to unit = time
+    df['DateTime'] = df['DateTime'].apply(lambda x: x.timestamp()).round() * factors[time]
     return df
 
 
-def find_time_elapsed(ptid, calc, path, time="seconds"):
-    df = load_label(ptid, labels_path=path)
+def find_time_elapsed(ptid, calc, path, time):
+    df = load_label(ptid, labels_path=path, time=time)
 
-    df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0]) // 1e6).astype(
-        "int32"
+    df[f"elapsed_{time}"] = ((df["DateTime"] - df["DateTime"].iloc[0])).astype(
+        np.int64
     )
     df.set_index(df[f"elapsed_{time}"], inplace=True)
     try:
