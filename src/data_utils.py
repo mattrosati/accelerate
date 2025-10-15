@@ -57,9 +57,6 @@ def load_label(patient_id, labels_path, time="us"):
 
 
 def find_time_elapsed(ptid, calc, path, start_time, time):
-    if re.search(r"_([2-9]+|1[0-9]+)", ptid):
-        print("Matched:", ptid)
-        return None
 
     df = load_label(ptid, labels_path=path, time=time)
 
@@ -73,7 +70,8 @@ def find_time_elapsed(ptid, calc, path, start_time, time):
     try:
         time = df[calc][df[calc].notna().all(axis=1)].index[0]
         if time < 0:
-            return None
+            print(f"neg time {ptid}, returning 0.")
+            return time - time
         return time
     except:
         print(f"No time found for {ptid}")

@@ -176,7 +176,7 @@ def main(ptid, file_path, mode, temp_dir_path):
     with h5py.File(temp_ptid_path, "w") as f:
         f.attrs["no_label_overlap"] = (data is None and windows is None)
         if f.attrs["no_label_overlap"]:
-            print(ptid)
+            print("Labels do not overlap with data for:", ptid)
             return None
         f.attrs["idx_unit"] = "token"
         f.attrs["len_unit"] = "token"

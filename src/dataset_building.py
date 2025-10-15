@@ -121,7 +121,7 @@ if __name__ == "__main__":
 
         # now for labels
         strip_ptid = ptid.split("_")[0]
-        df = load_label(strip_ptid, args.labels_dir)
+        df = load_label(strip_ptid, args.labels_dir, time="us")
 
         # remove patient if no labels
         all_null = pd.isnull(df).all(axis=0)
