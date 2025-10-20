@@ -30,6 +30,7 @@ WINDOW_SECONDS = 60
 # TODO: refactor to be tas kagnostic
 # TODO: refactor to add padding, then can do UMAPs!!!
 
+
 def get_window_index(mode):
     # according to mode, get index of time t of labels for the specific duration of the window
     match mode:
@@ -49,6 +50,7 @@ def extract_proportions(windows, labels, percentage=0.5, strategy="count"):
     elif strategy == "mean":
         return extract_proportions_mean(windows, labels)
 
+
 def extract_proportions_mean(windows, labels):
     in_out = np.empty(shape=len(windows), dtype=bool)
     for i, w in enumerate(windows):
@@ -64,6 +66,7 @@ def extract_proportions_mean(windows, labels):
         in_out[i] = (w_mean > lower_limit) and (w_mean < upper_limit)
 
     return in_out
+
 
 def extract_proportions_count(windows, labels, percentage=0.5):
     in_out = np.empty(shape=len(windows), dtype=bool)
@@ -152,9 +155,13 @@ def extractor(ptid, file_path, window_index, window_s, strategy="count"):
             ]
 
             # extract proportion_in T/F database
-            in_out = extract_proportions(windows, labels, percentage=percentage, strategy=strategy)
+            in_out = extract_proportions(
+                windows, labels, percentage=percentage, strategy=strategy
+            )
 
-            df = np.concatenate([ df, np.array(labels["DateTime"])[:, np.newaxis] ], axis=1)
+            df = np.concatenate(
+                [df, np.array(labels["DateTime"])[:, np.newaxis]], axis=1
+            )
 
             return in_out, df
 
@@ -174,7 +181,7 @@ def main(ptid, file_path, mode, temp_dir_path):
     temp_ptid_path = os.path.join(temp_dir_path, f"{ptid}.h5")
 
     with h5py.File(temp_ptid_path, "w") as f:
-        f.attrs["no_label_overlap"] = (data is None and windows is None)
+        f.attrs["no_label_overlap"] = data is None and windows is None
         if f.attrs["no_label_overlap"]:
             print("Labels do not overlap with data for:", ptid)
             return None
@@ -266,8 +273,6 @@ if __name__ == "__main__":
     # delete temp_dir
     if not args.debug:
         shutil.rmtree(args.temp_dir)
-
-
 
 
 #     futures = [ex.submit(process_feature, feat) for feat in features]

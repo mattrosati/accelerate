@@ -5,7 +5,8 @@ import h5py
 import numpy as np
 import pandas as pd
 
-def get_window(data, index, coords, window_index, window_s, percentage=0.5, pad=False):
+
+def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     # compute closest idx for data that matches coords
     seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()
     seg_end = index["endtime"].iloc[coords["segment"]].to_numpy()
@@ -22,7 +23,9 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5, pad=
 
     # get position of window bounds in absolute time to check if outside segments
     window_us = window_s * 1e6
-    window_index_us = (window_index) * 1e6 # I don't think I need a plus one here, if I am indexing 4 seconds of data, i want the 3 index or the last number at ms 3e3
+    window_index_us = (
+        window_index
+    ) * 1e6  # I don't think I need a plus one here, if I am indexing 4 seconds of data, i want the 3 index or the last number at ms 3e3
     window_start = coords["DateTime"].to_numpy() - float(window_index_us)
     window_end = window_start + window_us
     window_length = window_end - window_start
@@ -76,11 +79,6 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5, pad=
     )
     w_end_idx = index["startidx"].iloc[clean["segment"]].to_numpy() + window_end_tokens
 
-    # add padding if wanting to pad
-    if pad:
-        s_pad = np.maximum(seg_start - window_start, 0)
-        e_pad = np.maximum(window_end - seg_end, 0)
-
     df = np.concatenate(
         [
             w_start_idx[:, None],
@@ -92,6 +90,10 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5, pad=
     ).astype(np.int64)
 
     return df, clean
+
+
+def make_pad(data_file, window_list):
+    return
 
 
 # TODO: needs a window combiner for when I will ask it to do more than one var

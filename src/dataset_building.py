@@ -67,7 +67,7 @@ if __name__ == "__main__":
                 multiple_files[mult] += 1
             else:
                 multiple_files[mult] = 0
-    
+
     tmp = multiple_files.copy()
     multiple_files = {p: i for p, i in multiple_files.items() if i > 0}
 
@@ -95,8 +95,10 @@ if __name__ == "__main__":
 
     # re-add in pt ids with parts
     for mult_ptid in multiple_files.keys():
-       unique_ptid.discard(mult_ptid) 
-       unique_ptid = unique_ptid.union({f"{m}_{i + 1}" for m, j in multiple_files.items() for i in range(j+1) })
+        unique_ptid.discard(mult_ptid)
+        unique_ptid = unique_ptid.union(
+            {f"{m}_{i + 1}" for m, j in multiple_files.items() for i in range(j + 1)}
+        )
 
     # build external links to raw_data files and groups for labels
     print("\nBuilding global dataset...")
@@ -133,13 +135,14 @@ if __name__ == "__main__":
         # check that labels actually overlap with raw recording time when recording has multiple parts
         # delete if not
         if "_" in ptid:
-            raw_start = int(global_f[ptid + "/raw"].attrs['dataStartTimeUnix'][0])
-            raw_end = int(global_f[ptid + "/raw"].attrs['dataEndTimeUnix'][0])
-            if (raw_end < df["DateTime"].iloc[0] / 1e6) or (raw_start > df["DateTime"].iloc[-1] / 1e6):
+            raw_start = int(global_f[ptid + "/raw"].attrs["dataStartTimeUnix"][0])
+            raw_end = int(global_f[ptid + "/raw"].attrs["dataEndTimeUnix"][0])
+            if (raw_end < df["DateTime"].iloc[0] / 1e6) or (
+                raw_start > df["DateTime"].iloc[-1] / 1e6
+            ):
                 del global_f[ptid]
                 no_targets.append(ptid)
                 continue
-
 
         # make one dataset for labels with custom dtype
         nan_value = float(global_f[ptid + "/raw"].attrs["invalidValue"][0])
@@ -147,8 +150,6 @@ if __name__ == "__main__":
         arr = df.to_records(index=False)
         pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
         global_f.attrs["invalid_val"] = nan_value
-
-
 
         # prep a group for processed data
         processed = pt_group.require_group("processed")
@@ -202,8 +203,7 @@ if __name__ == "__main__":
     print(
         f"Total: n = { len(set([f.split('_')[0] for f in global_f.keys()])) } patients over n = { len(global_f.keys()) } files."
     )
-    
-    
+
     broken_numerics = [
         i for i in global_f if global_f[i]["processed"].attrs["broken_numeric"]
     ]
@@ -211,5 +211,3 @@ if __name__ == "__main__":
         f"- Subset with broken numeric data (n = {len(broken_numerics)}):",
         broken_numerics,
     )
-
-

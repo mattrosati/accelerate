@@ -8,7 +8,13 @@ import pandas as pd
 
 # pending useful sklearn imports
 
-conversion_factors = {'hr': (1/60/60), 'min': (1/60), 's': 1, 'ms': 1e3, 'us': 1e6}
+conversion_factors = {
+    "hr": (1 / 60 / 60),
+    "min": (1 / 60),
+    "s": 1,
+    "ms": 1e3,
+    "us": 1e6,
+}
 
 
 def printname(name):
@@ -52,7 +58,9 @@ def load_label(patient_id, labels_path, time="us"):
     # df.set_index("DateTime", inplace=True)
 
     # use .timestamp to convert to UNIX seconds, round to closest second, then convert to unit = time
-    df['DateTime'] = df['DateTime'].apply(lambda x: x.timestamp()).round() * conversion_factors[time]
+    df["DateTime"] = (
+        df["DateTime"].apply(lambda x: x.timestamp()).round() * conversion_factors[time]
+    )
     return df
 
 
@@ -62,9 +70,7 @@ def find_time_elapsed(ptid, calc, path, start_time, time):
 
     start_time = start_time * conversion_factors[time]
 
-    df[f"elapsed_{time}"] = ((df["DateTime"] - start_time)).astype(
-        np.int64
-    )
+    df[f"elapsed_{time}"] = ((df["DateTime"] - start_time)).astype(np.int64)
     df.set_index(df[f"elapsed_{time}"], inplace=True)
 
     try:
