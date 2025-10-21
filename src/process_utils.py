@@ -96,7 +96,7 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
 
 
 def make_pad(data_file, window_df):
-    # gets window df, returns 
+    # gets window df, returns
     return
 
 

@@ -181,12 +181,16 @@ if __name__ == "__main__":
         f"- Subset with broken numeric data (n = {len(broken_numerics)}):",
         broken_numerics,
     )
-    
+
     # add list of ptids that have good quality data as dataset in root
     not_skipped = set(global_f.keys())
-    label_data_not_overlapping_raw = set(['1043', '597_1'])
-    ptid_complete_list = not_skipped.difference(label_data_not_overlapping_raw, set(broken_numerics))
-    
+    label_data_not_overlapping_raw = set(["1043", "597_1"])
+    ptid_complete_list = not_skipped.difference(
+        label_data_not_overlapping_raw, set(broken_numerics)
+    )
+
     print(f"Totally healthy files:", len(ptid_complete_list))
 
-    global_f.create_dataset("healthy_ptids", data=list(ptid_complete_list), dtype=h5py.string_dtype())
+    global_f.create_dataset(
+        "healthy_ptids", data=list(ptid_complete_list), dtype=h5py.string_dtype()
+    )
