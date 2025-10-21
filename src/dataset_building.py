@@ -161,36 +161,6 @@ if __name__ == "__main__":
         except:
             pt_group["processed"].attrs["broken_numeric"] = True
 
-        # i don't think i actually need this
-        # # create continuous time array for all raw data
-        # processed = pt_group.require_group("processed")
-        # try:
-        #     continuous_time_process(pt_group, "waves")
-        #     continuous_time_process(pt_group, "numerics")
-        # except:
-        #     print(ptid)
-
-        #     # summarize numerics and waveforms
-        #     def summarize_series(name, obj, invalid_value=-99999):
-        #         print(f"Dataset: {name}")
-        #         df = pd.DataFrame(obj[:])
-        #         df.replace(invalid_value, np.nan, inplace=True)
-        #         print(f"Number of missing values: {df.isna().sum().sum()}")
-        #         print(df.describe())
-        #         print("\n")
-        #         return
-
-        #     print(f"Summarizing statistics for numerics and waveforms for patient {ptid}:")
-        #     pt_group["raw/numerics"].visititems(summarize_series)
-        #     f["raw/waves"].visititems(summarize_series)
-
-        # compare continuous time arrays with each other and with labels
-        # create a continuous time array for labels with missing times filled as simple NAs
-
-        # if ptid == "1002":
-        #     print(list(global_f.attrs.items()))
-
-    # continuous time and length comparisons
     print("Successful build of global dataset.\n")
 
     print(
@@ -211,3 +181,12 @@ if __name__ == "__main__":
         f"- Subset with broken numeric data (n = {len(broken_numerics)}):",
         broken_numerics,
     )
+    
+    # add list of ptids that have good quality data as dataset in root
+    not_skipped = set(global_f.keys())
+    label_data_not_overlapping_raw = set(['1043', '597_1'])
+    ptid_complete_list = not_skipped.difference(label_data_not_overlapping_raw, set(broken_numerics))
+    
+    print(f"Totally healthy files:", len(ptid_complete_list))
+
+    global_f.create_dataset("healthy_ptids", data=list(ptid_complete_list), dtype=h5py.string_dtype())
