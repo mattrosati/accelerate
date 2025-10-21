@@ -27,7 +27,12 @@ mamba create --prefix "$PREFIX" \
     pandas \
     matplotlib \
     tqdm \
-    h5py
+    h5py \
+    dask \
+    dask-ml \
+    umap \
+    scikit-learn \
+    seaborn
 conda activate "$PREFIX"
 
 # install additional packages
