@@ -244,7 +244,7 @@ if __name__ == "__main__":
 
     # load only to get length
     with h5py.File(args.data_file, "r") as f:
-        ptids = list(f.keys())
+        ptids = [pt for pt in f.keys() if isinstance(f[pt], h5py.Group)]
 
     # will do everything and write to file in temp_dir
     func = partial(
