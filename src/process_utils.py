@@ -7,6 +7,10 @@ import pandas as pd
 
 
 def get_window(data, index, coords, window_index, window_s, percentage=0.5):
+    # will obtain window start and end idx, plus total length and overlap length (in tokens)
+    # inputs: data (dataset with data of interest), index (contains segment information),
+    # coords (contains labels and their coordinates in time), window_index (token index of label value in window),
+    # window_s (duration of window in seconds), percentage (max percentage window allowed to overlap with gap)
     # compute closest idx for data that matches coords
     seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()
     seg_end = index["endtime"].iloc[coords["segment"]].to_numpy()
@@ -56,7 +60,6 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     seg_end, window_end = seg_end[~mask], window_end[~mask]
     seg_freq = seg_freq[~mask]
     overlap_len = overlap_len[~mask]
-    tmp = total_window_token_length.copy()
     total_window_token_length = total_window_token_length[~mask]
 
     # extract abp windows
@@ -92,7 +95,8 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     return df, clean
 
 
-def make_pad(data_file, window_list):
+def make_pad(data_file, window_df):
+    # gets window df, returns 
     return
 
 
