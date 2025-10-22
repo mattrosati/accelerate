@@ -1,5 +1,10 @@
 #!/bin/bash
 
+module reset
+module load miniconda
+conda activate cppopt-dl
+
+cd /home/mr2238/accelerate
 
 python src/dataset_building.py \
     ~/project_pi_np442/mr2238/accelerate/data/processed/ \

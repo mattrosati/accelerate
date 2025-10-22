@@ -17,7 +17,7 @@ PREFIX="/home/mr2238/project_pi_np442/mr2238/conda_envs/cppopt-dl"
 module reset
 
 module load miniconda
-cd /home/mr2238/cppopt-dl
+cd /home/mr2238/accelerate
 
 # this is just brute force env install because getting conda to work with .yml is terrible
 mamba create --prefix "$PREFIX" \

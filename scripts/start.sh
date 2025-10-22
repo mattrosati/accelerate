@@ -34,7 +34,7 @@ cd accelerate
 } >> "$BASHRC"
 
 
-salloc -t "$TIME_FORMAT" --mem-per-cpu=12G --cpus-per-task=4
+salloc -t "$TIME_FORMAT" --mem-per-cpu=8G --cpus-per-task=3
 
 sed -i "/$TEMP_TAG/,/$TEMP_TAG/d" "$BASHRC"
 echo "Cleaned up .bashrc."
