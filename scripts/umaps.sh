@@ -16,6 +16,6 @@ cd /home/mr2238/accelerate
 
 # Do umaps
 echo "Calculating all umaps for plots and etc."
-python src/umaps.py
+python -u src/umaps.py
 
 conda deactivate
