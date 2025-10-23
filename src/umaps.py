@@ -79,18 +79,18 @@ if __name__ == "__main__":
     scaled_values.compute()
 
     # do umap
-    print("Doing large UMAP....")
-    fit = umap.UMAP(verbose=True)
-    u = fit.fit_transform(scaled_values)
-    u_df = pd.DataFrame(u, columns=["dim_1", "dim_2"])
-    index_w = wind_dask[:, 0].compute()
-    u_df = u_df.set_index(index_w)
-    info_df[["dim_1", "dim_2"]] = u_df
-    info_df.to_pickle(
-        "/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/large_umap.pkl"
-    )
-    print("Done")
-    del fit
+    # print("Doing large UMAP....")
+    # fit = umap.UMAP(verbose=True)
+    # u = fit.fit_transform(scaled_values)
+    # u_df = pd.DataFrame(u, columns=["dim_1", "dim_2"])
+    # index_w = wind_dask[:, 0].compute()
+    # u_df = u_df.set_index(index_w)
+    # info_df[["dim_1", "dim_2"]] = u_df
+    # info_df.to_pickle(
+    #     "/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/large_umap.pkl"
+    # )
+    # print("Done")
+    # del fit
 
     print("Doing PCA")
     n_dim = 600
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     print("Doing UMAP grid search...")
     # umap and graph with changes in basic parameters
     index_w = wind_dask[:, 0].compute()
-    for n_neighbors, min_dist in itertools.product([2, 15, 50, 200], [0.1, 0.25, 0.5]):
+    for n_neighbors, min_dist in itertools.product([15, 50], [0.1, 0.25, 0.5]):
         print(n_neighbors, min_dist)
         fit2 = umap.UMAP(n_neighbors=n_neighbors, min_dist=min_dist, verbose=True)
         u2 = fit2.fit_transform(X)
@@ -114,30 +114,30 @@ if __name__ == "__main__":
             [f"dim_1_{n_neighbors}_{min_dist}", f"dim_2_{n_neighbors}_{min_dist}"]
         ] = u2_df
 
-        # graph and color by in or out
-        fig, ax = plt.subplots(figsize=(10, 10))
-        sns.scatterplot(
-            data=info_df,
-            x=f"dim_1_{n_neighbors}_{min_dist}",
-            y=f"dim_2_{n_neighbors}_{min_dist}",
-            hue="in?",
-            palette="Set1",
-            s=1,
-            linewidth=0,
-            alpha=0.4,
-        )
-        ax.set_xlabel("UMAP Dimension 1")
-        ax.set_ylabel("UMAP Dimension 2")
-        plt.title("UMAP colored by label")
-        leg = plt.legend(title="Inside AR Limits?", markerscale=10)
-        for lh in leg.legend_handles:
-            lh.set_alpha(1)
-        img_name = f"pca_umap_neigh{n_neighbors}_dist{min_dist}.png"
-        plt.savefig(os.path.join(img_dir, img_name))
-        plt.close()
+        # # graph and color by in or out
+        # fig, ax = plt.subplots(figsize=(10, 10))
+        # sns.scatterplot(
+        #     data=info_df,
+        #     x=f"dim_1_{n_neighbors}_{min_dist}",
+        #     y=f"dim_2_{n_neighbors}_{min_dist}",
+        #     hue="in?",
+        #     palette="Set1",
+        #     s=1,
+        #     linewidth=0,
+        #     alpha=0.4,
+        # )
+        # ax.set_xlabel("UMAP Dimension 1")
+        # ax.set_ylabel("UMAP Dimension 2")
+        # plt.title("UMAP colored by label")
+        # leg = plt.legend(title="Inside AR Limits?", markerscale=10)
+        # for lh in leg.legend_handles:
+        #     lh.set_alpha(1)
+        # img_name = f"pca_umap_neigh{n_neighbors}_dist{min_dist}.png"
+        # plt.savefig(os.path.join(img_dir, img_name))
+        # plt.close()
 
     info_df.to_pickle(
-        f"/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/total_umaps.pkl"
+        f"/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/total_umaps2.pkl"
     )
 
     print("Done.")
