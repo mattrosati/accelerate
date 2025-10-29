@@ -78,14 +78,16 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                 for i in df
             ]
 
-            w_vectors = np.stack([k["w"] for k in windows], axis = 0)
+            w_vectors = np.stack([k["w"] for k in windows], axis=0)
 
             # extract proportion_in T/F database
             in_out = extract_proportions(
                 windows, labels, percentage=percentage, strategy=strategy
             )
 
-            df = pd.DataFrame(df, columns=["startidx", "endidx", "overlap_len", "tot_len"])
+            df = pd.DataFrame(
+                df, columns=["startidx", "endidx", "overlap_len", "tot_len"]
+            )
             df["datetime"] = np.array(labels["DateTime"])
             df["in?"] = in_out
 
@@ -95,8 +97,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
             return None, None
 
 
-
-def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode='mean'):
+def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
     """
     Extract data for a given patient ID and variable from the HDF5 file,
     process it into windows, and save the results to a temporary directory.
@@ -109,22 +110,26 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode='mean'):
         window_size (int): Size of the window in seconds.
         mode (str): Mode for window extraction ('before', 'after', 'within', 'mean').
     Returns:
-        None 
+        None
     """
 
-    window_index, window_s = get_window_index(mode, window_seconds = window_size), window_size
+    window_index, window_s = (
+        get_window_index(mode, window_seconds=window_size),
+        window_size,
+    )
     strategy = "mean" if mode == "mean" else "count"
     percentage = 0.0 if strategy == "mean" else PERCENT_IN_MIN
 
     # extract windows for this patient and variable
-    in_out, windows = get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percentage)
+    in_out, windows = get_windows_var(
+        v, ptid, file_path, window_index, window_s, strategy, percentage
+    )
 
     # save to a temp file as a zarr array
     in_out.to_pickle(os.path.join(temp_dir_path, f"{ptid}_labels.pkl"))
     zarr.save(os.path.join(temp_dir_path, f"{ptid}_x.zarr"), windows)
 
     return None
-
 
 
 def finalize(ptids, v, temp_dir_path, norm_dir):
@@ -138,12 +143,13 @@ def finalize(ptids, v, temp_dir_path, norm_dir):
         temp_dir_path (str): Path to the temporary directory where intermediate results are stored.
         norm_dir (str): Path to the directory for saving normalization parameters.
     Returns:
-        None 
+        None
     """
 
     # TODO: needs to be made
 
     return None
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -151,26 +157,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_file",
         help="Path to processed data HDF5 file.",
-        default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/all_data.hdf5"
+        default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/all_data.hdf5",
     )
     parser.add_argument(
         "--save_dir",
         help="Directory to save extracted data.",
-        default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/training"
+        default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/training",
     )
     parser.add_argument(
         "-w",
         "--window_size",
         type=int,
-        default=60*5,
-        help="Window size in seconds to extract values, default is 5 minutes."
+        default=60 * 5,
+        help="Window size in seconds to extract values, default is 5 minutes.",
     )
     parser.add_argument(
         "--variables",
         "-v",
         nargs="+",
         default=FEATURES,
-        help="List of variables to include in model data. Default is all features."
+        help="List of variables to include in model data. Default is all features.",
     )
     parser.add_argument(
         "-d",
@@ -183,45 +189,46 @@ if __name__ == "__main__":
     np.random.seed(420)
     dataset_name = f"w_{args.window_size}s_{'_'.join(args.variables)}"
 
-    print(f"Dataset creation with window size {args.window_size}s for variables: {args.variables}.")
+    print(
+        f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
+    )
 
     # make test, train and temp directories, prepare for saving
     save_dir = os.path.join(args.save_dir, dataset_name)
     for split in ["train", "test", "temp", "scalers"]:
         os.makedirs(os.path.join(save_dir, split), exist_ok=True)
 
-
     temp_dir = os.path.join(save_dir, "temp")
     norm_dir = os.path.join(save_dir, "scalers")
     # need healthy ptids
     with h5py.File(args.data_file, "r") as f:
-        ptids = f['healthy_ptids'][:].astype(str).tolist()
+        ptids = f["healthy_ptids"][:].astype(str).tolist()
 
     # will do everything and write to file in temp_dir
     for var in args.variables:
         print(f"Extracting for variable {var}:")
         func = partial(
-            extract_data, v=var, file_path=args.data_file, temp_dir_path=temp_dir, window_size=args.window_size,
+            extract_data,
+            v=var,
+            file_path=args.data_file,
+            temp_dir_path=temp_dir,
+            window_size=args.window_size,
         )
         results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
-        
+
         print("Merging into final datasets (with normalization and imputation):")
         func = partial(
-            finalize, v=var, temp_dir_path=temp_dir, norm_dir=norm_dir,
+            finalize,
+            v=var,
+            temp_dir_path=temp_dir,
+            norm_dir=norm_dir,
         )
         results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 
         print("")
 
-
     # take finalized data from temp_dir, merge, and move to save_dir
-    
-    
-    
-    
-    
-    
+
     # delete temp_dir
     if not args.debug:
         shutil.rmtree(temp_dir)
-

@@ -25,7 +25,7 @@ from constants import *
 from process_utils import get_window
 
 
-def get_window_index(mode, window_seconds = WINDOW_SECONDS):
+def get_window_index(mode, window_seconds=WINDOW_SECONDS):
     # according to mode, get index of time t of labels for the specific duration of the window
     match mode:
         case "before":

@@ -20,10 +20,22 @@ from sklearn.model_selection import train_test_split
 if __name__ == "__main__":
     parser = ArgumentParser(description="Train and test splits.")
 
-    parser.add_argument("--data_dir", help="Path to processed data file.", default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/all_data.hdf5")
-    parser.add_argument("--train_frac", help="Fraction of data to be in training set.", default=0.8)
-    parser.add_argument("--in_out_mode", help="Mode of in_out, will be 'mean'.", default='mean')
-    parser.add_argument("--labels_dir", help="Path to processed data file.", default = "/home/mr2238/project_pi_np442/mr2238/accelerate/data/labels")
+    parser.add_argument(
+        "--data_dir",
+        help="Path to processed data file.",
+        default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/all_data.hdf5",
+    )
+    parser.add_argument(
+        "--train_frac", help="Fraction of data to be in training set.", default=0.8
+    )
+    parser.add_argument(
+        "--in_out_mode", help="Mode of in_out, will be 'mean'.", default="mean"
+    )
+    parser.add_argument(
+        "--labels_dir",
+        help="Path to processed data file.",
+        default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/labels",
+    )
 
     args = parser.parse_args()
 
@@ -41,12 +53,12 @@ if __name__ == "__main__":
     # get % time out and time to mapopt
     df_rows = []
     calc = TARGETS
-    ptids = np.array(f['healthy_ptids'][...]).astype(str)
+    ptids = np.array(f["healthy_ptids"][...]).astype(str)
     for pt in ptids:
-        in_out_df = pd.Series(f[f"{pt}/processed/in_out_{mode}/in_out"][...]).astype(bool)
-        idx_window = pd.DataFrame(
-                f[f"{pt}/processed/in_out_{mode}/window_idx"][...]
-            )
+        in_out_df = pd.Series(f[f"{pt}/processed/in_out_{mode}/in_out"][...]).astype(
+            bool
+        )
+        idx_window = pd.DataFrame(f[f"{pt}/processed/in_out_{mode}/window_idx"][...])
         len_window = idx_window.iloc[:, 1] - idx_window.iloc[:, 0]
         in_percent = (in_out_df * len_window).sum() / len_window.sum()
         if len_window.sum() == 0:
@@ -54,36 +66,43 @@ if __name__ == "__main__":
             print(idx_window)
             print(in_out_df)
 
-        time_to_mapopt = find_time_elapsed(pt, calc, args.labels_dir, time="s", start_time=int(f[f"{pt}/raw/"].attrs["dataStartTimeUnix"][0]))
-
+        time_to_mapopt = find_time_elapsed(
+            pt,
+            calc,
+            args.labels_dir,
+            time="s",
+            start_time=int(f[f"{pt}/raw/"].attrs["dataStartTimeUnix"][0]),
+        )
 
         # add to attrs
-        f[f'{pt}/processed'].attrs['out_percent'] = 1 - in_percent
-        f[f'{pt}/processed'].attrs['time_to_mapopt_s'] = time_to_mapopt
+        f[f"{pt}/processed"].attrs["out_percent"] = 1 - in_percent
+        f[f"{pt}/processed"].attrs["time_to_mapopt_s"] = time_to_mapopt
 
         # append row of pt, % in, time to mapopt
         df_rows.append([pt, 1 - in_percent, time_to_mapopt])
 
-    df = pd.DataFrame(df_rows, columns = ['ptid', 'out_percent', 'to_mapopt_s']).dropna()
+    df = pd.DataFrame(df_rows, columns=["ptid", "out_percent", "to_mapopt_s"]).dropna()
     # remove large outlier
     # df = df[df['to_mapopt_s'] < 300_000]
 
     # make keys by cutting into 5 and 3 buckets for both out_percent and time to map opt
-    df['out_percent_cat'] = pd.cut(df['out_percent'], bins=5, labels=False)
+    df["out_percent_cat"] = pd.cut(df["out_percent"], bins=5, labels=False)
 
-    df['mapopt_cap'] = df['to_mapopt_s'].clip(upper = 20_000)
-    df['mapopt_cat'] = pd.cut(df['mapopt_cap'], bins=3, labels=False)
-    df['class'] = df['out_percent_cat'].astype(str) + df['mapopt_cat'].astype(str)
-            
+    df["mapopt_cap"] = df["to_mapopt_s"].clip(upper=20_000)
+    df["mapopt_cat"] = pd.cut(df["mapopt_cap"], bins=3, labels=False)
+    df["class"] = df["out_percent_cat"].astype(str) + df["mapopt_cat"].astype(str)
+
     print(df)
     print(df.describe())
-    print(df['class'].value_counts())
+    print(df["class"].value_counts())
 
-    keys = df['class']
-    train, test = train_test_split(df, random_state=42, train_size = args.train_frac, stratify=keys)
+    keys = df["class"]
+    train, test = train_test_split(
+        df, random_state=42, train_size=args.train_frac, stratify=keys
+    )
 
     # apply train or test label to f.ptid.attrs
-    for t in train['ptid']:
-        f[t].attrs['split'] = 'train'
-    for t in test['ptid']:
-        f[t].attrs['split'] = 'test'    
+    for t in train["ptid"]:
+        f[t].attrs["split"] = "train"
+    for t in test["ptid"]:
+        f[t].attrs["split"] = "test"
