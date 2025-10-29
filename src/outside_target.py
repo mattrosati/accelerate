@@ -21,27 +21,21 @@ from functools import partial
 from filelock import FileLock
 
 from data_utils import build_continuous_time, load_label
-from constants import TARGETS, FEATURES
+from constants import *
 from process_utils import get_window
 
-PERCENT_IN_MIN = 0.5
-WINDOW_SECONDS = 60
 
-# TODO: refactor to be tas kagnostic
-# TODO: refactor to add padding, then can do UMAPs!!!
-
-
-def get_window_index(mode):
+def get_window_index(mode, window_seconds = WINDOW_SECONDS):
     # according to mode, get index of time t of labels for the specific duration of the window
     match mode:
         case "before":
-            return WINDOW_SECONDS - 1
+            return window_seconds - 1
         case "after":
             return 0
         case "within":
-            return WINDOW_SECONDS // 2 - 1
+            return window_seconds // 2 - 1
         case "mean":
-            return WINDOW_SECONDS - 1
+            return window_seconds - 1
 
 
 def extract_proportions(windows, labels, percentage=0.5, strategy="count"):
