@@ -5,6 +5,95 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from constants import *
+
+def get_window_index(mode, window_seconds=WINDOW_SECONDS):
+    # according to mode, get index of time t of labels for the specific duration of the window
+    match mode:
+        case "before":
+            return window_seconds - 1
+        case "after":
+            return 0
+        case "within":
+            return window_seconds // 2 - 1
+        case "mean":
+            return window_seconds - 1
+
+
+def extract_proportions(windows, labels, percentage=0.5, strategy="count"):
+    if strategy == "count":
+        return extract_proportions_count(windows, labels, percentage)
+    elif strategy == "mean":
+        return extract_proportions_mean(windows, labels)
+
+
+def extract_proportions_mean(windows, labels):
+    in_out = np.empty(shape=len(windows), dtype=bool)
+    for i, w in enumerate(windows):
+        lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
+        upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
+
+        w_vector = w["w"]
+        if w["total_length"].sum() == 0:
+            print("Record with no windows, unclear why")
+
+        # find average of window
+        w_mean = np.nanmean(w_vector)
+        if np.isnan(w_mean):
+            print("Window has nans")
+        in_out[i] = (w_mean > lower_limit) and (w_mean < upper_limit)
+
+    return in_out
+
+
+def extract_proportions_count(windows, labels, percentage=0.5):
+    in_out = np.empty(shape=len(windows), dtype=bool)
+    for i, w in enumerate(windows):
+        lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
+        upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
+
+        w_vector = w["w"]
+
+        # note: all lengths are in tokens
+
+        # dropping nas from window
+        valid = np.isfinite(w_vector)
+        w_vector = w_vector[valid]
+        proportion_na = (~valid).sum() / w["total_length"]
+
+        abp_status = (w_vector >= lower_limit) & (w_vector <= upper_limit)
+        proportion_in = abp_status.sum() / w["total_length"]
+        proportion_out = 1 - proportion_in
+
+        proportion_gap = w["overlap_len"] / w["total_length"]
+
+        if (proportion_in - proportion_out) < proportion_na + proportion_gap:
+            in_out[i] = np.nan
+            # write na
+        else:
+            in_out[i] = proportion_in > proportion_out
+
+    return in_out
+
+def impute(window, strategy='lin_interpolate'):
+    # imputes missing values given a window according to the specified strategy
+    if np.isnan(window).sum() / len(window) > PERCENT_NA_MAX:
+        # print("WARNING: large amount of Nas in window.")
+        return None
+    if strategy == 'lin_interpolate':
+        x_coords = np.arange(len(window))
+        w_vals = window[~np.isnan(window)]
+        if len(w_vals) == 0:
+            print("Window completely NaN, cannot impute.")
+            return None
+        window = np.interp(
+            x=x_coords, 
+            xp=x_coords[~np.isnan(window)],
+            fp=w_vals
+        )
+    else:
+        pass # implement other strategies as needed
+    return window
 
 def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     # will obtain window start and end idx, plus total length and overlap length (in tokens)
@@ -101,3 +190,91 @@ def make_pad(data_file, window_df):
 
 
 # TODO: needs a window combiner for when I will ask it to do more than one var
+
+
+def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percentage):
+    with h5py.File(file_path, "r") as f:
+        # load labels[targets] and var timeseries
+        labels = pd.DataFrame(f[f"{ptid}/labels"][...][TARGETS + ["DateTime"]])
+        if v in f[f"{ptid}/raw/numerics"].keys():
+            v_long = f"numerics/{v}"
+        else:
+            v_long = f"waves/{v}"
+        ts = f[f"{ptid}/raw/{v_long}"][...]
+        ts_index = pd.DataFrame(f[f"{ptid}/raw/{v_long}"].attrs["index"])
+
+        # replace invalid vals and filter out
+        invalid_val = f.attrs["invalid_val"]
+        labels.replace(invalid_val, np.nan, inplace=True)
+        labels.dropna(inplace=True)
+
+        ts[ts == invalid_val] = np.nan
+        # keep nas in, need to discard if too many in window
+
+        # build empty dataset same rows as labels
+        data = {}
+        in_out = np.empty(shape=labels.shape[0])
+        start_end = np.empty(shape=(labels.shape[0], 2))
+
+        # convert index to segments start and end times
+        ts_index["endtime"] = ts_index["starttime"] + (
+            ts_index["length"] / ts_index["frequency"] * 1e6
+        ).astype(np.int64)
+
+        # select label timepoints in segments
+        seg_start = ts_index["starttime"].to_numpy()[:, None]
+        seg_end = ts_index["endtime"].to_numpy()[:, None]
+        in_segment = (labels["DateTime"].to_numpy() < seg_end) & (
+            labels["DateTime"].to_numpy() >= seg_start
+        )  # (n_seg, data_points)
+        mask = np.any(in_segment, axis=0)  # (data_points, 1)
+
+        # find segment for each timestamp
+        first_idx = np.argmax(in_segment, axis=0)
+
+        labels["segment"] = pd.Series(first_idx, index=labels.index)
+        labels = labels[mask]
+
+        if labels.shape[0] != 0:
+            # select out the windows
+            df, labels = get_window(
+                ts, ts_index, labels, window_index, window_s, percentage=percentage
+            )
+
+            # extract window data
+            windows = [
+                {"w": impute(ts[i[0] : i[1]]), "overlap_len": i[2], "total_length": i[3]}
+                for i in df
+            ]
+            # drop if imputation returned none
+            windows = [
+                {"w": w["w"], "overlap_len": w["overlap_len"], "total_length": w["total_length"]}
+                for i, w in enumerate(windows) if w["w"] is not None
+            ]
+            labels = labels.iloc[
+                [i for i, w in enumerate(windows) if w["w"] is not None]
+            ]
+            df = df[
+                [i for i, w in enumerate(windows) if w["w"] is not None]
+            ]
+
+            # extract proportion_in T/F data
+            if v != 'abp':
+                return pd.DataFrame(labels["DateTime"]).rename(columns={"DateTime":"datetime"}), windows  # only compute in_out for abp
+            else:
+                in_out = extract_proportions(
+                    windows, labels, percentage=percentage, strategy=strategy
+                )
+
+                df = pd.DataFrame(
+                    df, columns=["startidx", "endidx", "overlap_len", "tot_len"]
+                )
+                df["datetime"] = np.array(labels["DateTime"])
+                df["in?"] = in_out
+
+                if len(in_out) == 0:
+                    print("No valid windows extracted for patient:", ptid)
+                return df, windows
+
+        else:
+            return None, None
