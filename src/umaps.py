@@ -32,9 +32,13 @@ from dask_ml.impute import SimpleImputer
 from dask_ml.decomposition import PCA
 
 if __name__ == "__main__":
-    
+
     parser = ArgumentParser()
-    parser.add_argument('--do_big', action='store_true', help='Whether to do the big umap or the pca+umap')
+    parser.add_argument(
+        "--do_big",
+        action="store_true",
+        help="Whether to do the big umap or the pca+umap",
+    )
     args = parser.parse_args()
 
     pd.options.display.float_format = "{:10,.2f}".format
@@ -71,28 +75,40 @@ if __name__ == "__main__":
     info_df["len"] = info_df["endidx"] - info_df["startidx"]
     assert len(info_df["len"].unique()) == 1
 
-    os.makedirs("/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/", exist_ok=True)
+    os.makedirs(
+        "/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/",
+        exist_ok=True,
+    )
     zarr_store = "/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/array.zarr"
     if not os.path.exists(zarr_store):
         print("Making windows...")
         # make windows zarr store
-        
-        big_arr_path = '/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/memmap.dat'
 
-        # save all windows as zarr file 
+        big_arr_path = "/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/windows/memmap.dat"
+
+        # save all windows as zarr file
         # saving all windows into a numpy memmap file
-        windows = np.memmap(big_arr_path, dtype='float32', mode='w+', shape=[info_df.shape[0], info_df['len'][0] + 1])
+        windows = np.memmap(
+            big_arr_path,
+            dtype="float32",
+            mode="w+",
+            shape=[info_df.shape[0], info_df["len"][0] + 1],
+        )
         with h5py.File(global_path, "r") as f:
             nan_value = f.attrs["invalid_val"]
             uniques = info_df.ptid.unique()
             for pt in tqdm(uniques):
                 abp_arr = f[f"{pt}/raw/waves/abp"]
-                ptid_info = info_df[info_df['ptid'] == pt]
+                ptid_info = info_df[info_df["ptid"] == pt]
                 for w, row in ptid_info.iterrows():
-                    abp_arr.read_direct(windows, source_sel=np.s_[row['startidx']: row['endidx']], dest_sel=np.s_[w, 1:])
+                    abp_arr.read_direct(
+                        windows,
+                        source_sel=np.s_[row["startidx"] : row["endidx"]],
+                        dest_sel=np.s_[w, 1:],
+                    )
                     windows[w, 0] = w
                     windows[w, windows[w] == nan_value] = np.nan
-                    windows[w, 1:] = impute(windows[w, 1:], strategy='lin_interpolate')
+                    windows[w, 1:] = impute(windows[w, 1:], strategy="lin_interpolate")
                 # print(windows[w, :])
 
         windows.flush()
@@ -102,7 +118,6 @@ if __name__ == "__main__":
 
         del windows
         os.remove(big_arr_path)
-
 
     wind_dask = da.from_zarr(zarr_store)
 
@@ -130,7 +145,9 @@ if __name__ == "__main__":
         n_dim = 600
         pca = PCA(n_components=n_dim)
         pca = pca.fit(scaled_values)
-        umap_dim = np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > 0.95][0] + 1
+        umap_dim = (
+            np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > 0.95][0] + 1
+        )
         print(f"Using {umap_dim} dimensions for UMAP at threshold variance of 0.95.")
         X = pca.transform(scaled_values)[:, :umap_dim]
         print("Done.")

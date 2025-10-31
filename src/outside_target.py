@@ -32,7 +32,15 @@ def main(ptid, file_path, mode, temp_dir_path):
     percentage = 0.0 if strategy == "mean" else PERCENT_IN_MIN
 
     # extract data
-    data, _ = get_windows_var('abp', ptid, file_path, window_index, window_s, strategy=strategy, percentage=percentage)
+    data, _ = get_windows_var(
+        "abp",
+        ptid,
+        file_path,
+        window_index,
+        window_s,
+        strategy=strategy,
+        percentage=percentage,
+    )
 
     # writes data in defined directory
     temp_ptid_path = os.path.join(temp_dir_path, f"{ptid}.h5")
@@ -47,16 +55,24 @@ def main(ptid, file_path, mode, temp_dir_path):
         f.attrs["len_unit"] = "token"
         f.create_dataset("in_out", data=in_bool.astype(np.int8), dtype=np.int8)
         f.create_dataset(
-            "window_idx", data=(data[["startidx", "endidx"]].to_numpy()).astype(np.int64), dtype=np.int64
+            "window_idx",
+            data=(data[["startidx", "endidx"]].to_numpy()).astype(np.int64),
+            dtype=np.int64,
         )
         f.create_dataset(
-            "overlap_len", data=(data["overlap_len"].to_numpy()).astype(np.int64), dtype=np.int64
+            "overlap_len",
+            data=(data["overlap_len"].to_numpy()).astype(np.int64),
+            dtype=np.int64,
         )
         f.create_dataset(
-            "total_len", data=(data["tot_len"].to_numpy()).astype(np.int64), dtype=np.int64
+            "total_len",
+            data=(data["tot_len"].to_numpy()).astype(np.int64),
+            dtype=np.int64,
         )
         f.create_dataset(
-            "label_timestamp", data=(data["datetime"].to_numpy()).astype(np.int64), dtype=np.int64
+            "label_timestamp",
+            data=(data["datetime"].to_numpy()).astype(np.int64),
+            dtype=np.int64,
         )
 
     return None
@@ -100,7 +116,7 @@ if __name__ == "__main__":
     # make dir if it doesn't exist
     os.makedirs(args.temp_dir, exist_ok=True)
 
-    # load 
+    # load
     with h5py.File(args.data_file, "r") as f:
         ptids = f["healthy_ptids"][:].astype(str).tolist()
 
@@ -109,7 +125,7 @@ if __name__ == "__main__":
         main, file_path=args.data_file, mode=args.mode, temp_dir_path=args.temp_dir
     )
     results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
-    
+
     # remove temp files for broken patients and exclude them from downstream tasks
     broken_pts = [r for r in results if r is not None]
     for bp in broken_pts:
@@ -121,9 +137,7 @@ if __name__ == "__main__":
     # loop through temp_dir and add to main dataset
     with h5py.File(args.data_file, "r+") as f:
         del f["healthy_ptids"]
-        f.create_dataset(
-            "healthy_ptids", data=ptids, dtype=h5py.string_dtype()
-        )
+        f.create_dataset("healthy_ptids", data=ptids, dtype=h5py.string_dtype())
         for temp_file in os.listdir(args.temp_dir):
             p = os.path.basename(temp_file).split(".")[0]
             temp_path = os.path.join(args.temp_dir, temp_file)

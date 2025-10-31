@@ -23,20 +23,30 @@ from data_utils import build_continuous_time, load_label
 from constants import *
 from process_utils import *
 
-def merge_vars(variables, save_dir):
-    print(variables)
-    for split in ["train", "test"]:
-        for v in variables:
-            labels = pd.read_pickle(
-                os.path.join(save_dir, "temp", f"{split}_{v}_labels.pkl")
-            )
-            labels = labels.rename(columns={old : old + f"_{v}" for old in labels.columns if old != "datetime"})
-            print(labels.head())
 
-            print(labels.shape)
+def intersection_windows(variables, split_dict, temp_dir):
+    for s, pts in split_dict.items():
+        for p in pts:
+            for i, v in enumerate(variables):
+                labels = pd.read_pickle(os.path.join(temp_dir, v, p, "labels.pkl"))
+                print(labels.shape)
+                print(labels.head())
+                labels = labels.reset_index()
+                labels = labels.rename(columns={"index": f"{v}_index"})
+                if i == 0:
+                    combined = labels
+                else:
+                    combined = combined.merge(labels, how="inner", on="datetime")
+            print(combined.shape)
+            print(combined.head())
 
-    # need to do an inner merge on DateTime for all variables on labels, but KEEP the indeces
-    # then subset the data arrays to match the indeces of the merged labels
+            # subset x data and overwrite with common size
+            for i, v in enumerate(variables):
+                z_arr = da.from_zarr(os.path.join(temp_dir, v, p, "x.zarr"))
+                print(z_arr.shape)
+                z_arr = z_arr[combined[f"{v}_index"], :]
+                print(z_arr.shape)
+                zarr.save(os.path.join(temp_dir, v, p, "x.zarr"), z_arr)
 
     return None
 
@@ -76,8 +86,10 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
     w_vectors = np.stack([k["w"] for k in windows], axis=0)
 
     # save to a temp file as a zarr array
-    in_out.to_pickle(os.path.join(temp_dir_path, f"{ptid}_labels.pkl"))
-    zarr.save(os.path.join(temp_dir_path, f"{ptid}_x.zarr"), w_vectors)
+    temp_dir_path = os.path.join(temp_dir_path, ptid)
+    os.makedirs(temp_dir_path, exist_ok=True)
+    in_out.to_pickle(os.path.join(temp_dir_path, f"labels.pkl"))
+    zarr.save(os.path.join(temp_dir_path, f"x.zarr"), w_vectors)
 
     return None
 
@@ -105,8 +117,8 @@ def finalize(v, split_dict, save_dir, ptids, debug=False):
         # go through ptids and append to cumulative var arrays
         print(f"Finalizing {s}:")
         for i, p in tqdm(enumerate(ptids), total=len(ptids)):
-            zarr_pt_store = os.path.join(save_dir, "temp", v, f"{p}_x.zarr")
-            labels_pt_store = os.path.join(save_dir, "temp", v, f"{p}_labels.pkl")
+            zarr_pt_store = os.path.join(save_dir, "temp", v, p, "x.zarr")
+            labels_pt_store = os.path.join(save_dir, "temp", v, p, "labels.pkl")
             if i == 0:
                 z_arr = da.from_zarr(zarr_pt_store)
                 base = z_arr
@@ -215,13 +227,14 @@ if __name__ == "__main__":
                 if bp in split_dict[s]:
                     split_dict[s].remove(bp)
 
-        print("Merging into final datasets (with normalization):")
+    # check labels
+    intersection_windows(args.variables, split_dict, temp_dir)
+
+    for var in args.variables:
+        # print("Merging into final datasets (with normalization):")
         finalize(var, split_dict, save_dir, ptids, debug=args.debug)
 
-        print("")
-
-    # check labels
-    merge_vars(args.variables, save_dir)
+    print("")
 
     # preprocess dataset
     # normalize (imputation already done)

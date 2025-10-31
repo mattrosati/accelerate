@@ -7,6 +7,7 @@ import pandas as pd
 
 from constants import *
 
+
 def get_window_index(mode, window_seconds=WINDOW_SECONDS):
     # according to mode, get index of time t of labels for the specific duration of the window
     match mode:
@@ -79,27 +80,25 @@ def extract_proportions_count(windows, labels, percentage=0.5):
 
     return in_out
 
-def impute(window, strategy='lin_interpolate'):
+
+def impute(window, strategy="lin_interpolate"):
     # imputes missing values given a window according to the specified strategy
     if PERCENT_NA_MAX == 1:
         return window
     if np.isnan(window).sum() / len(window) > PERCENT_NA_MAX:
         # print("WARNING: large amount of Nas in window.")
         return None
-    if strategy == 'lin_interpolate':
+    if strategy == "lin_interpolate":
         x_coords = np.arange(len(window))
         w_vals = window[~np.isnan(window)]
         if len(w_vals) == 0:
             print("Window completely NaN, cannot impute.")
             return None
-        window = np.interp(
-            x=x_coords, 
-            xp=x_coords[~np.isnan(window)],
-            fp=w_vals
-        )
+        window = np.interp(x=x_coords, xp=x_coords[~np.isnan(window)], fp=w_vals)
     else:
-        pass # implement other strategies as needed
+        pass  # implement other strategies as needed
     return window
+
 
 def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     # will obtain window start and end idx, plus total length and overlap length (in tokens)
@@ -246,9 +245,9 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
             df, labels = get_window(
                 ts, ts_index, labels, window_index, window_s, percentage=percentage
             )
-            
+
             # in_out computation should not be based on imputed values
-            if v == 'abp':
+            if v == "abp":
                 windows = [
                     {"w": ts[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
                     for i in df
@@ -259,24 +258,31 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
 
             # extract window data
             windows = [
-                {"w": impute(ts[i[0] : i[1]]), "overlap_len": i[2], "total_length": i[3]}
+                {
+                    "w": impute(ts[i[0] : i[1]]),
+                    "overlap_len": i[2],
+                    "total_length": i[3],
+                }
                 for i in df
             ]
 
             # drop if imputation returned none
             windows_filtered = [
-                {"w": w["w"], "overlap_len": w["overlap_len"], "total_length": w["total_length"]}
-                for i, w in enumerate(windows) if w["w"] is not None
+                {
+                    "w": w["w"],
+                    "overlap_len": w["overlap_len"],
+                    "total_length": w["total_length"],
+                }
+                for i, w in enumerate(windows)
+                if w["w"] is not None
             ]
             labels = labels.iloc[
                 [i for i, w in enumerate(windows) if w["w"] is not None]
             ]
-            df = df[
-                [i for i, w in enumerate(windows) if w["w"] is not None]
-            ]
+            df = df[[i for i, w in enumerate(windows) if w["w"] is not None]]
 
             # extract proportion_in T/F data
-            if v == 'abp':
+            if v == "abp":
                 in_out = in_out[
                     [i for i, w in enumerate(windows) if w["w"] is not None]
                 ]
@@ -291,7 +297,12 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                     print("No valid windows extracted for patient:", ptid)
                 return df, windows_filtered
             else:
-                return pd.DataFrame(labels["DateTime"]).rename(columns={"DateTime":"datetime"}), windows_filtered  # only compute in_out for abp
+                return (
+                    pd.DataFrame(labels["DateTime"])
+                    .reset_index(drop=True)
+                    .rename(columns={"DateTime": "datetime"}),
+                    windows_filtered,
+                )  # only compute in_out for abp
 
         else:
             return None, None
