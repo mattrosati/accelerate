@@ -2,6 +2,7 @@ import os
 import sys
 import shutil
 from argparse import ArgumentParser
+from pickle import dump
 
 import h5py
 
@@ -23,30 +24,83 @@ from data_utils import build_continuous_time, load_label
 from constants import *
 from process_utils import *
 
+from dask_ml.preprocessing import StandardScaler
+
+
+def normalize(save_dir, variables):
+    for v in tqdm(variables):
+        z_arr_store = os.path.join(save_dir, "train", f"{v}_x.zarr")
+        scaler_store = os.path.join(save_dir, "scalers", f"{v}_scaler.pkl")
+        z_arr = da.from_zarr(z_arr_store)
+
+        if v == 'spo2':
+            # log transform and normalize
+            continue
+        else:
+            # fit scaler and save
+            z_arr = z_arr.rechunk({1: z_arr.shape[1]})
+
+            scaler = StandardScaler()
+            scaled_values = scaler.fit_transform(z_arr)
+
+            dump(scaler, open(scaler_store, 'wb'))
+            da.to_zarr(scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr"))
+
+
+        # transform test set
+        z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
+        z_arr_test = da.from_zarr(z_arr_store_test)
+        z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
+        scaled_values = scaler.transform(z_arr_test)
+        da.to_zarr(scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr"))
+
+        # clean up
+        shutil.rmtree(z_arr_store)
+        shutil.rmtree(z_arr_store_test)
+
+    return None
+
+
+
+def generate_final(save_dir, variables):
+    for s in ["train", "test"]:
+        for i, v in tqdm(enumerate(variables), total=len(variables)):
+            if v != 'spo2':
+                z_arr_store = os.path.join(save_dir, s, f"{v}_x_scaled.zarr")
+            else:
+                z_arr_store = os.path.join(save_dir, s, f"{v}_x.zarr")
+            z_arr = da.from_zarr(z_arr_store)
+
+            if i == 0:
+                base = z_arr
+            else:
+                base = da.concatenate([base, z_arr], axis=1)
+            
+        da.to_zarr(base, url=os.path.join(save_dir, s, f"x.zarr"))
+
+        # clean up
+        for f in os.listdir(os.path.join(save_dir, s)):
+            if "_x" in f:
+                shutil.rmtree(os.path.join(save_dir, s, f))
+        
+
+    return None
+
 
 def intersection_windows(variables, split_dict, temp_dir):
     for s, pts in split_dict.items():
         for p in pts:
             for i, v in enumerate(variables):
                 labels = pd.read_pickle(os.path.join(temp_dir, v, p, "labels.pkl"))
-                print(labels.shape)
-                print(labels.head())
                 labels = labels.reset_index()
                 labels = labels.rename(columns={"index": f"{v}_index"})
                 if i == 0:
                     combined = labels
                 else:
                     combined = combined.merge(labels, how="inner", on="datetime")
-            print(combined.shape)
-            print(combined.head())
 
-            # subset x data and overwrite with common size
-            for i, v in enumerate(variables):
-                z_arr = da.from_zarr(os.path.join(temp_dir, v, p, "x.zarr"))
-                print(z_arr.shape)
-                z_arr = z_arr[combined[f"{v}_index"], :]
-                print(z_arr.shape)
-                zarr.save(os.path.join(temp_dir, v, p, "x.zarr"), z_arr)
+                # save combined
+                combined.to_pickle(os.path.join(temp_dir, f"{p}_combined_labels.pkl"))
 
     return None
 
@@ -94,7 +148,7 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
     return None
 
 
-def finalize(v, split_dict, save_dir, ptids, debug=False):
+def finalize(variables, split_dict, save_dir, ptids):
     """
     Finalize the extracted data for a given variable, split into train and test.
 
@@ -111,30 +165,34 @@ def finalize(v, split_dict, save_dir, ptids, debug=False):
     test_dir = os.path.join(save_dir, "test")
 
     for s, ptids in split_dict.items():
-        zarr_all_store = os.path.join(save_dir, "temp", f"{s}_{v}_x.zarr")
-        labels_all_store = os.path.join(save_dir, "temp", f"{s}_{v}_labels.pkl")
+        labels_all_store = os.path.join(save_dir, s, f"labels.pkl")
 
         # go through ptids and append to cumulative var arrays
-        print(f"Finalizing {s}:")
-        for i, p in tqdm(enumerate(ptids), total=len(ptids)):
-            zarr_pt_store = os.path.join(save_dir, "temp", v, p, "x.zarr")
-            labels_pt_store = os.path.join(save_dir, "temp", v, p, "labels.pkl")
-            if i == 0:
-                z_arr = da.from_zarr(zarr_pt_store)
-                base = z_arr
+        for v in variables:
+            zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
+            print(f"Finalizing {v} for split {s}:")
+            for i, p in tqdm(enumerate(ptids), total=len(ptids)):
+                zarr_pt_store = os.path.join(save_dir, "temp", v, p, "x.zarr")
+                labels_pt_store = os.path.join(temp_dir, f"{p}_combined_labels.pkl")
+
                 labels_df = pd.read_pickle(labels_pt_store)
-            else:
-                base = da.concatenate([base, da.from_zarr(zarr_pt_store)], axis=0)
-                labels_df = pd.concat(
-                    [labels_df, pd.read_pickle(labels_pt_store)],
-                    axis=0,
-                ).reset_index(drop=True)
 
-        da.to_zarr(base, url=zarr_all_store, overwrite=True)
+                # grab and filter
+                z_arr = da.from_zarr(zarr_pt_store)
+                z_arr = z_arr[labels_df[f"{v}_index"], :]
+                if i == 0:
+                    base = z_arr
+                    combo_label = labels_df
+                else:
+                    base = da.concatenate([base, z_arr], axis=0)
+                    labels_df = pd.concat(
+                        [combo_label, pd.read_pickle(labels_pt_store)],
+                        axis=0,
+                    ).reset_index(drop=True)
+
+            da.to_zarr(base, url=zarr_all_store)
+
         labels_df.to_pickle(labels_all_store)
-
-    if not debug:
-        shutil.rmtree(os.path.join(save_dir, "temp", v))
 
     return None
 
@@ -200,7 +258,7 @@ if __name__ == "__main__":
     with h5py.File(args.data_file, "r") as f:
         ptids = f["healthy_ptids"][:].astype(str).tolist()
         # for debugging
-        ptids = ptids[:5]
+        ptids = ptids
         for p in ptids:
             if f[p].attrs["split"] == "train":
                 split_dict["train"].append(p)
@@ -230,17 +288,25 @@ if __name__ == "__main__":
     # check labels
     intersection_windows(args.variables, split_dict, temp_dir)
 
-    for var in args.variables:
-        # print("Merging into final datasets (with normalization):")
-        finalize(var, split_dict, save_dir, ptids, debug=args.debug)
+    # finalizing
+    finalize(args.variables, split_dict, save_dir, ptids)
+
+    # delete temp_dir
+    if not args.debug:
+        shutil.rmtree(temp_dir)
+
 
     print("")
 
     # preprocess dataset
     # normalize (imputation already done)
+    print("Normalizing:")
+    normalize(save_dir, args.variables)
 
-    # take finalized data from temp_dir, concatenate across vars, and move to save_dir
+    print("Generating whole dataset:")
+    generate_final(save_dir, args.variables)
 
-    # delete temp_dir
-    # if not args.debug:
-    #     shutil.rmtree(temp_dir)
+    z_arr_train = da.from_zarr(os.path.join(save_dir, 'train', 'x.zarr'))
+    z_arr_test = da.from_zarr(os.path.join(save_dir, 'test', 'x.zarr'))
+    print(f"Train and test datasets generated adequately. {z_arr_train.shape[0]} windows in train and {z_arr_test.shape[0]} in test with {z_arr_train.shape[1]} dimensions.")
+

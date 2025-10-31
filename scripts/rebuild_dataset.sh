@@ -1,6 +1,15 @@
 #!/bin/bash
+#SBATCH --job-name=accelerate-build
+#SBATCH --output=logs/output_build_%A.out
+#SBATCH --error=logs/output_build_%A.out
+#SBATCH --partition day                           # Train on day
+#SBATCH --requeue
+#SBATCH --mem-per-cpu=20G 
+#SBATCH --cpus-per-task=4                      
+#SBATCH --time=1-00:00:00                         # Time limit hrs:min:sec
 
-module reset
+date;hostname;pwd
+
 module load miniconda
 conda activate cppopt-dl
 
@@ -17,3 +26,5 @@ python src/outside_target.py \
     -m "mean"
 
 python src/train_test_split.py
+
+python -u src/data_extract.py
