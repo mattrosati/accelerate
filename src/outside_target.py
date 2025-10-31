@@ -38,10 +38,10 @@ def main(ptid, file_path, mode, temp_dir_path):
     temp_ptid_path = os.path.join(temp_dir_path, f"{ptid}.h5")
 
     with h5py.File(temp_ptid_path, "w") as f:
-        f.attrs["no_label_overlap"] = data is None
-        if f.attrs["no_label_overlap"]:
-            print("Labels do not overlap with data for:", ptid)
-            return None
+        f.attrs["in_out_broken"] = data is None or len(data) == 0
+        if f.attrs["in_out_broken"]:
+            print("Invalid data:", ptid)
+            return ptid
         in_bool = data["in?"]
         f.attrs["idx_unit"] = "token"
         f.attrs["len_unit"] = "token"
@@ -100,15 +100,22 @@ if __name__ == "__main__":
     # make dir if it doesn't exist
     os.makedirs(args.temp_dir, exist_ok=True)
 
-    # load only to get length
+    # load 
     with h5py.File(args.data_file, "r") as f:
-        ptids = [pt for pt in f.keys() if isinstance(f[pt], h5py.Group)]
+        ptids = f["healthy_ptids"][:].astype(str).tolist()
 
     # will do everything and write to file in temp_dir
     func = partial(
         main, file_path=args.data_file, mode=args.mode, temp_dir_path=args.temp_dir
     )
     results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
+    
+    # remove temp files for broken patients
+    # broken_pts = [r for r in results if r is not None]
+    # for bp in broken_pts:
+    #     bp_path = os.path.join(args.temp_dir, f"{bp}.h5")
+    #     if os.path.exists(bp_path):
+    #         os.remove(bp_path)
 
     # loop through temp_dir and add to main dataset
     with h5py.File(args.data_file, "r+") as f:

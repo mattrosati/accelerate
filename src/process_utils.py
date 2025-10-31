@@ -38,9 +38,13 @@ def extract_proportions_mean(windows, labels):
             print("Record with no windows, unclear why")
 
         # find average of window
+        if np.isnan(w_vector).all():
+            # these entries will get removed once we filter for windows that have a lot of nans
+            in_out[i] = np.nan
+            continue
         w_mean = np.nanmean(w_vector)
-        if np.isnan(w_mean):
-            print("Window has nans")
+        # if np.isnan(w_mean):
+        #     print("Window has nans")
         in_out[i] = (w_mean > lower_limit) and (w_mean < upper_limit)
 
     return in_out
@@ -77,6 +81,8 @@ def extract_proportions_count(windows, labels, percentage=0.5):
 
 def impute(window, strategy='lin_interpolate'):
     # imputes missing values given a window according to the specified strategy
+    if PERCENT_NA_MAX == 1:
+        return window
     if np.isnan(window).sum() / len(window) > PERCENT_NA_MAX:
         # print("WARNING: large amount of Nas in window.")
         return None
@@ -240,14 +246,25 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
             df, labels = get_window(
                 ts, ts_index, labels, window_index, window_s, percentage=percentage
             )
+            
+            # in_out computation should not be based on imputed values
+            if v == 'abp':
+                windows = [
+                    {"w": ts[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
+                    for i in df
+                ]
+                in_out = extract_proportions(
+                    windows, labels, percentage=percentage, strategy=strategy
+                )
 
             # extract window data
             windows = [
                 {"w": impute(ts[i[0] : i[1]]), "overlap_len": i[2], "total_length": i[3]}
                 for i in df
             ]
+
             # drop if imputation returned none
-            windows = [
+            windows_filtered = [
                 {"w": w["w"], "overlap_len": w["overlap_len"], "total_length": w["total_length"]}
                 for i, w in enumerate(windows) if w["w"] is not None
             ]
@@ -259,12 +276,10 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
             ]
 
             # extract proportion_in T/F data
-            if v != 'abp':
-                return pd.DataFrame(labels["DateTime"]).rename(columns={"DateTime":"datetime"}), windows  # only compute in_out for abp
-            else:
-                in_out = extract_proportions(
-                    windows, labels, percentage=percentage, strategy=strategy
-                )
+            if v == 'abp':
+                in_out = in_out[
+                    [i for i, w in enumerate(windows) if w["w"] is not None]
+                ]
 
                 df = pd.DataFrame(
                     df, columns=["startidx", "endidx", "overlap_len", "tot_len"]
@@ -274,7 +289,9 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
 
                 if len(in_out) == 0:
                     print("No valid windows extracted for patient:", ptid)
-                return df, windows
+                return df, windows_filtered
+            else:
+                return pd.DataFrame(labels["DateTime"]).rename(columns={"DateTime":"datetime"}), windows_filtered  # only compute in_out for abp
 
         else:
             return None, None
