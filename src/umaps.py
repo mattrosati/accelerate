@@ -109,8 +109,7 @@ if __name__ == "__main__":
     # manual scaling
     mean_all = da.nanmean(wind_dask[:, 1:]).compute()
     std_all = da.nanstd(wind_dask[:, 1:]).compute()
-    scaled_values = (wind_dask - mean_all) / std_all
-    scaled_values.compute()
+    scaled_values = (wind_dask[:, 1:] - mean_all) / std_all
 
     # do umap
     if args.do_big:

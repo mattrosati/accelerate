@@ -68,6 +68,11 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
         v, ptid, file_path, window_index, window_s, strategy, percentage
     )
 
+    broken_bool = in_out is None or len(in_out) == 0
+    if broken_bool:
+        print(f"In var {v}, invalid data for file:", ptid)
+        return ptid
+
     w_vectors = np.stack([k["w"] for k in windows], axis=0)
 
     # save to a temp file as a zarr array
@@ -203,7 +208,14 @@ if __name__ == "__main__":
         )
         results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 
-        print("Merging into final datasets (with normalization and imputation):")
+        # remove invalid patients from split dict
+        broken_pts = [r for r in results if r is not None]
+        for bp in broken_pts:
+            for s in split_dict.keys():
+                if bp in split_dict[s]:
+                    split_dict[s].remove(bp)
+
+        print("Merging into final datasets (with normalization):")
         finalize(var, split_dict, save_dir, ptids, debug=args.debug)
 
         print("")

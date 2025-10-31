@@ -110,15 +110,20 @@ if __name__ == "__main__":
     )
     results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
     
-    # remove temp files for broken patients
-    # broken_pts = [r for r in results if r is not None]
-    # for bp in broken_pts:
-    #     bp_path = os.path.join(args.temp_dir, f"{bp}.h5")
-    #     if os.path.exists(bp_path):
-    #         os.remove(bp_path)
+    # remove temp files for broken patients and exclude them from downstream tasks
+    broken_pts = [r for r in results if r is not None]
+    for bp in broken_pts:
+        bp_path = os.path.join(args.temp_dir, f"{bp}.h5")
+        if os.path.exists(bp_path):
+            os.remove(bp_path)
+        ptids.remove(bp)
 
     # loop through temp_dir and add to main dataset
     with h5py.File(args.data_file, "r+") as f:
+        del f["healthy_ptids"]
+        f.create_dataset(
+            "healthy_ptids", data=ptids, dtype=h5py.string_dtype()
+        )
         for temp_file in os.listdir(args.temp_dir):
             p = os.path.basename(temp_file).split(".")[0]
             temp_path = os.path.join(args.temp_dir, temp_file)
