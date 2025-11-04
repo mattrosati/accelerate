@@ -292,6 +292,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                 )
                 df["datetime"] = np.array(labels["DateTime"])
                 df["in?"] = in_out
+                df["ptid"] = ptid
 
                 if len(in_out) == 0:
                     print("No valid windows extracted for patient:", ptid)

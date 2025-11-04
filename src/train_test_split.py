@@ -1,5 +1,6 @@
 import os
 import sys
+import random
 from argparse import ArgumentParser
 
 import h5py
@@ -41,6 +42,7 @@ if __name__ == "__main__":
 
     mode = args.in_out_mode
     np.random.seed(420)
+    random.seed(420)
 
     # make destination h5py file
     f = h5py.File(args.data_dir, "a")
