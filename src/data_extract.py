@@ -25,26 +25,51 @@ from constants import *
 from process_utils import *
 
 from dask_ml.preprocessing import StandardScaler
+from dask_ml.decomposition import PCA
+
+from scipy.stats import shapiro
+from sklearn.preprocessing import PowerTransformer
 
 
-def normalize(save_dir, variables):
+def normalize(save_dir, variables, img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize"):
+    n_samples = 100_000
+    os.makedirs(img_dir, exist_ok=True)
     for v in tqdm(variables):
         z_arr_store = os.path.join(save_dir, "train", f"{v}_x.zarr")
         scaler_store = os.path.join(save_dir, "scalers", f"{v}_scaler.pkl")
         z_arr = da.from_zarr(z_arr_store)
 
-        if v == 'spo2':
-            # log transform and normalize
-            continue
-        else:
-            # fit scaler and save
-            z_arr = z_arr.rechunk({1: z_arr.shape[1]})
+        # print Shapiro-Wilk Test for unnormalized
+        z_arr = z_arr.rechunk({1: z_arr.shape[1]})
+        sampled_data_pre = da.random.choice(da.ravel(z_arr), size=n_samples, replace=False).compute()
 
+        if v == 'spo2':
+            # flip tail, then box cox normalization
+            scaler = PowerTransformer()
+            z_arr = 1.0 - z_arr
+
+            scaled_values = scaler.fit_transform(z_arr)
+            scaled_values = da.from_array(scaled_values, chunks=z_arr.chunks)
+        else:
+            # for others, do classic normalization
             scaler = StandardScaler()
             scaled_values = scaler.fit_transform(z_arr)
 
-            dump(scaler, open(scaler_store, 'wb'))
-            da.to_zarr(scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr"))
+        dump(scaler, open(scaler_store, 'wb'))
+        da.to_zarr(scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr"))
+
+        sampled_data_post = da.random.choice(da.ravel(scaled_values), size=n_samples, replace=False).compute()
+
+        # graph effect of vars
+        fig, ax = plt.subplots(figsize=(8, 8))
+        sns.histplot(sampled_data_pre, ax=ax, stat="probability", label="Before Norm", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+        sns.histplot(sampled_data_post, ax=ax, stat="probability", label="After Norm", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+        ax.set_xlabel(f"{v}")
+        plt.title(f"Effect of normalization on {v}")
+        ax.legend()
+        img_name = f"{v}_norm_effect.png"
+        plt.savefig(os.path.join(img_dir, img_name))
+        plt.close()
 
 
         # transform test set
@@ -148,7 +173,7 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
     return None
 
 
-def finalize(variables, split_dict, save_dir, ptids):
+def finalize(variables, split_dict, save_dir):
     """
     Finalize the extracted data for a given variable, split into train and test.
 
@@ -289,7 +314,7 @@ if __name__ == "__main__":
     intersection_windows(args.variables, split_dict, temp_dir)
 
     # finalizing
-    finalize(args.variables, split_dict, save_dir, ptids)
+    finalize(args.variables, split_dict, save_dir)
 
     # delete temp_dir
     if not args.debug:
@@ -310,3 +335,18 @@ if __name__ == "__main__":
     z_arr_test = da.from_zarr(os.path.join(save_dir, 'test', 'x.zarr'))
     print(f"Train and test datasets generated adequately. {z_arr_train.shape[0]} windows in train and {z_arr_test.shape[0]} in test with {z_arr_train.shape[1]} dimensions.")
 
+
+    print("Doing PCAs:")
+    n_dim = 1_000
+    pca = PCA(n_components=n_dim)
+    pca = pca.fit(z_arr_train)
+    selected_dim = (
+        np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > 0.95][0] + 1
+    )
+    print(f"Using {selected_dim} dimensions at threshold variance of 0.95.")
+    X_train = pca.transform(z_arr_train)[:, :selected_dim]
+    X_test = pca.transform(z_arr_test)[:, :selected_dim]
+    da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"pca_x.zarr"))
+    da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"pca_x.zarr"))
+
+    print("Done.")
