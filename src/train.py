@@ -33,7 +33,7 @@ if __name__ == "__main__":
         "--train_dir",
         help="Directory to training data and to store models.",
         default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/training/w_300s_hr_rso2r_rso2l_spo2_abp",
-        required=True
+        required=True,
     )
     parser.add_argument(
         "--model",
@@ -43,7 +43,6 @@ if __name__ == "__main__":
         choices=["log_reg", "xgboost", "svm", "knn", "rand_forest"],
         required=True,
     )
-
 
     args = parser.parse_args()
     np.random.seed(420)
@@ -62,15 +61,13 @@ if __name__ == "__main__":
     elif args.model == "knn":
         model = KNeighborsClassifier()
         params = {
-            "n_neighbors": np.linspace(1, 1_000, num = 20).astype(int),
-            "weights": ['uniform', 'distance'],
+            "n_neighbors": np.linspace(1, 1_000, num=20).astype(int),
+            "weights": ["uniform", "distance"],
         }
     elif args.model == "rand_forest":
         pass
 
-
     # load data
-
 
     # init random search
     # n_examples = 4 * len(X_train)
@@ -83,13 +80,13 @@ if __name__ == "__main__":
         patience=True,
     )
 
-
     # train
     search.fit(X_train, y_train)
 
     # print best scores
 
-
     # save model
-    dump(search.best_estimator_, open(os.path.join(model_store, f"{args.model}.pkl"), 'wb'))
-
+    dump(
+        search.best_estimator_,
+        open(os.path.join(model_store, f"{args.model}.pkl"), "wb"),
+    )

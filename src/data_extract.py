@@ -30,7 +30,12 @@ from dask_ml.decomposition import PCA
 from sklearn.preprocessing import PowerTransformer
 
 
-def normalize(save_dir, variables, img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize", graph=False):
+def normalize(
+    save_dir,
+    variables,
+    img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize",
+    graph=False,
+):
     n_samples = 100_000
     os.makedirs(img_dir, exist_ok=True)
     for v in tqdm(variables):
@@ -41,30 +46,52 @@ def normalize(save_dir, variables, img_dir="/home/mr2238/project_pi_np442/mr2238
         # find the scales
         z_arr = z_arr.rechunk({1: z_arr.shape[1]})
         if graph:
-            sampled_data_pre = da.random.choice(da.ravel(z_arr), size=n_samples, replace=False).compute()
+            sampled_data_pre = da.random.choice(
+                da.ravel(z_arr), size=n_samples, replace=False
+            ).compute()
 
-        if v == 'spo2':
+        if v == "spo2":
             # flip tail, then box cox normalization
             scaler = PowerTransformer()
             z_arr = 1.0 - z_arr
 
             scaled_values = scaler.fit_transform(z_arr.compute())
-            scaled_values = da.from_array(scaled_values).rechunk({1: scaled_values.shape[1]})
+            scaled_values = da.from_array(scaled_values).rechunk(
+                {1: scaled_values.shape[1]}
+            )
         else:
             # for others, do classic normalization
             scaler = StandardScaler()
             scaled_values = scaler.fit_transform(z_arr)
 
-        dump(scaler, open(scaler_store, 'wb'))
-        da.to_zarr(scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr"))
+        dump(scaler, open(scaler_store, "wb"))
+        da.to_zarr(
+            scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr")
+        )
 
         # graph effect of norm
         if graph:
-            sampled_data_post = da.random.choice(da.ravel(scaled_values), size=n_samples, replace=False).compute()
+            sampled_data_post = da.random.choice(
+                da.ravel(scaled_values), size=n_samples, replace=False
+            ).compute()
 
             fig, ax = plt.subplots(figsize=(8, 8))
-            sns.histplot(sampled_data_pre, ax=ax, stat="probability", label="Before Norm", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
-            sns.histplot(sampled_data_post, ax=ax, stat="probability", label="After Norm", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+            sns.histplot(
+                sampled_data_pre,
+                ax=ax,
+                stat="probability",
+                label="Before Norm",
+                edgecolor=(0, 0, 0, 0.5),
+                alpha=0.5,
+            )
+            sns.histplot(
+                sampled_data_post,
+                ax=ax,
+                stat="probability",
+                label="After Norm",
+                edgecolor=(0, 0, 0, 0.5),
+                alpha=0.5,
+            )
             ax.set_xlabel(f"{v}")
             plt.title(f"Effect of normalization on {v}")
             ax.legend()
@@ -72,24 +99,26 @@ def normalize(save_dir, variables, img_dir="/home/mr2238/project_pi_np442/mr2238
             plt.savefig(os.path.join(img_dir, img_name))
             plt.close()
 
-
         # transform test set
         z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
         z_arr_test = da.from_zarr(z_arr_store_test)
-        if v == 'spo2':
+        if v == "spo2":
             scaled_values = scaler.fit_transform(z_arr_test.compute())
-            scaled_values = da.from_array(scaled_values).rechunk({1: scaled_values.shape[1]})
+            scaled_values = da.from_array(scaled_values).rechunk(
+                {1: scaled_values.shape[1]}
+            )
         else:
             z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
             scaled_values = scaler.transform(z_arr_test)
-        da.to_zarr(scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr"))
+        da.to_zarr(
+            scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
+        )
 
         # clean up
         shutil.rmtree(z_arr_store)
         shutil.rmtree(z_arr_store_test)
 
     return None
-
 
 
 def generate_final(save_dir, variables):
@@ -102,14 +131,13 @@ def generate_final(save_dir, variables):
                 base = z_arr
             else:
                 base = da.concatenate([base, z_arr], axis=1)
-            
+
         da.to_zarr(base, url=os.path.join(save_dir, s, f"x.zarr"))
 
         # clean up
         for f in os.listdir(os.path.join(save_dir, s)):
             if "_x" in f:
                 shutil.rmtree(os.path.join(save_dir, s, f))
-        
 
     return None
 
@@ -322,7 +350,6 @@ if __name__ == "__main__":
     if not args.debug:
         shutil.rmtree(temp_dir)
 
-
     print("")
 
     # preprocess dataset
@@ -333,10 +360,11 @@ if __name__ == "__main__":
     print("Generating whole dataset:")
     generate_final(save_dir, args.variables)
 
-    z_arr_train = da.from_zarr(os.path.join(save_dir, 'train', 'x.zarr'))
-    z_arr_test = da.from_zarr(os.path.join(save_dir, 'test', 'x.zarr'))
-    print(f"Train and test datasets generated adequately. {z_arr_train.shape[0]} windows in train and {z_arr_test.shape[0]} in test with {z_arr_train.shape[1]} dimensions.")
-
+    z_arr_train = da.from_zarr(os.path.join(save_dir, "train", "x.zarr"))
+    z_arr_test = da.from_zarr(os.path.join(save_dir, "test", "x.zarr"))
+    print(
+        f"Train and test datasets generated adequately. {z_arr_train.shape[0]} windows in train and {z_arr_test.shape[0]} in test with {z_arr_train.shape[1]} dimensions."
+    )
 
     print("Doing PCAs:")
     n_dim = 3_000
