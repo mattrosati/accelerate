@@ -9,3 +9,5 @@ FEATURES = ["hr", "rso2r", "rso2l", "spo2", "abp"]
 PERCENT_IN_MIN = 0.5
 PERCENT_NA_MAX = 0.25
 WINDOW_SECONDS = 60
+
+SMOOTH_FRAC = 0.80

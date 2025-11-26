@@ -19,13 +19,54 @@ def get_window_index(mode, window_seconds=WINDOW_SECONDS):
             return window_seconds // 2 - 1
         case "mean":
             return window_seconds - 1
+        case "smooth":
+            return window_seconds - 1
 
 
-def extract_proportions(windows, labels, percentage=0.5, strategy="count"):
+def extract_proportions(windows, labels, percentage=0.5, strategy="count", ref=None):
     if strategy == "count":
         return extract_proportions_count(windows, labels, percentage)
     elif strategy == "mean":
         return extract_proportions_mean(windows, labels)
+    elif strategy == "smooth":
+        return extract_proportions_smooth(windows, labels, percentage, ref)
+
+
+def extract_proportions_smooth(windows, labels, percentage, ref):
+    in_out = np.empty(shape=len(windows), dtype=bool)
+    for i, w in enumerate(windows):       
+        start = labels["start_idx"].iloc[ref[i]]
+        end = labels["end_idx"].iloc[ref[i]]
+        lower_limits = labels["LLA_Yale_affected_beta"].loc[start:end]
+        upper_limits = labels["ULA_Yale_affected_beta"].loc[start:end]
+
+        w_vector = w["w"]
+        
+        if w["total_length"].sum() == 0:
+            print("Record with no windows, unclear why")
+
+        # split in minute by minute
+        intervals = len(lower_limits)
+        split_window = w_vector.reshape((intervals, -1), order='C')
+
+        # find average of window
+        if (np.isnan(split_window)).all(axis=1).any():
+            # these entries will get removed once we filter for windows that have a lot of nans
+            in_out[i] = np.nan
+            continue
+
+        mean_arr = np.nanmean(split_window, axis=1)
+
+        # find fraction of time within limits
+        out = ((mean_arr < lower_limits.values) | (mean_arr > upper_limits.values))
+        frac_out = out.mean()
+
+        # set according to percentage
+        if frac_out >= SMOOTH_FRAC:
+            print(np.concatenate((mean_arr[:, None], lower_limits.values[:, None], upper_limits.values[:, None]), axis=1))
+        in_out[i] = frac_out < SMOOTH_FRAC
+
+    return in_out
 
 
 def extract_proportions_mean(windows, labels):
@@ -46,7 +87,7 @@ def extract_proportions_mean(windows, labels):
         w_mean = np.nanmean(w_vector)
         # if np.isnan(w_mean):
         #     print("Window has nans")
-        in_out[i] = (w_mean > lower_limit) and (w_mean < upper_limit)
+        in_out[i] = (w_mean >= lower_limit) and (w_mean <= upper_limit)
 
     return in_out
 
@@ -186,6 +227,11 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
         axis=1,
     ).astype(np.int64)
 
+    # need idx of start of window for the labels to extract all labels in window later
+    clean = clean.copy()
+    clean["end_idx"] = clean.index
+    clean["start_idx"] = clean["end_idx"] - (window_s // 60) + 1
+
     return df, clean
 
 
@@ -213,12 +259,14 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         labels.replace(invalid_val, np.nan, inplace=True)
         labels.dropna(inplace=True)
 
+        # replace with nan if value is 0 or less (incompatible with life)
+        # replace invalid values with nan
         ts[ts == invalid_val] = np.nan
+        ts[ts <= 0] = np.nan
         # keep nas in, need to discard if too many in window
 
         # build empty dataset same rows as labels
         data = {}
-        in_out = np.empty(shape=labels.shape[0])
         start_end = np.empty(shape=(labels.shape[0], 2))
 
         # convert index to segments start and end times
@@ -238,7 +286,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         first_idx = np.argmax(in_segment, axis=0)
 
         labels["segment"] = pd.Series(first_idx, index=labels.index)
-        labels = labels[mask]
+        labels = labels[mask] # keep only labels that fall within the segments
 
         if labels.shape[0] != 0:
             # select out the windows
@@ -246,17 +294,30 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                 ts, ts_index, labels, window_index, window_s, percentage=percentage
             )
 
+            # if I am smoothing, I will drop the windows without enough labels
+            assert len(df) == labels.shape[0]
+            if strategy == "smooth":
+                df2 = []
+                for i, d in enumerate(df):
+                    if labels["start_idx"].iloc[i] in labels.index:
+                        d = np.append(d, i)
+                        df2.append([d])
+                df = np.concatenate(df2, axis = 0)
+
             # in_out computation should not be based on imputed values
             if v == "abp":
                 windows = [
                     {"w": ts[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
                     for i in df
-                ]
+                ] 
+                ref = None
+                if strategy == "smooth":
+                    ref = list([int(v[4]) for v in df])
                 in_out = extract_proportions(
-                    windows, labels, percentage=percentage, strategy=strategy
+                    windows, labels, percentage=percentage, strategy=strategy, ref=ref
                 )
 
-            # extract window data
+            # extract window data: impute
             windows = [
                 {
                     "w": impute(ts[i[0] : i[1]]),
@@ -287,6 +348,9 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                     [i for i, w in enumerate(windows) if w["w"] is not None]
                 ]
 
+                # drop ref
+                df = np.array(df)[:, :4]
+                
                 df = pd.DataFrame(
                     df, columns=["startidx", "endidx", "overlap_len", "tot_len"]
                 )

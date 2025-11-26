@@ -121,10 +121,10 @@ def normalize(
     return None
 
 
-def generate_final(save_dir, variables):
+def generate_final(save_dir, variables, transform=""):
     for s in ["train", "test"]:
         for i, v in tqdm(enumerate(variables), total=len(variables)):
-            z_arr_store = os.path.join(save_dir, s, f"{v}_x_scaled.zarr")
+            z_arr_store = os.path.join(save_dir, s, f"{transform}{v}_x_scaled.zarr")
             z_arr = da.from_zarr(z_arr_store)
 
             if i == 0:
@@ -132,12 +132,7 @@ def generate_final(save_dir, variables):
             else:
                 base = da.concatenate([base, z_arr], axis=1)
 
-        da.to_zarr(base, url=os.path.join(save_dir, s, f"x.zarr"))
-
-        # clean up
-        for f in os.listdir(os.path.join(save_dir, s)):
-            if "_x" in f:
-                shutil.rmtree(os.path.join(save_dir, s, f))
+        da.to_zarr(base, url=os.path.join(save_dir, s, f"{transform}x.zarr"))
 
     return None
 
@@ -179,8 +174,12 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
         get_window_index(mode, window_seconds=window_size),
         window_size,
     )
-    strategy = "mean" if mode == "mean" else "count"
-    percentage = 0.0 if strategy == "mean" else PERCENT_IN_MIN
+    if mode in ["mean", "smooth"]:
+        strategy = mode
+        percentage = 0.0
+    else:
+        strategy = "count"
+        percentage = PERCENT_IN_MIN
 
     # extract windows for this patient and variable
     in_out, windows = get_windows_var(
@@ -240,17 +239,62 @@ def finalize(variables, split_dict, save_dir):
                     combo_label = labels_df
                 else:
                     base = da.concatenate([base, z_arr], axis=0)
-                    labels_df = pd.concat(
+                    combo_label = pd.concat(
                         [combo_label, pd.read_pickle(labels_pt_store)],
                         axis=0,
                     ).reset_index(drop=True)
 
             da.to_zarr(base, url=zarr_all_store)
 
-        labels_df.to_pickle(labels_all_store)
+        combo_label.to_pickle(labels_all_store)
 
     return None
 
+def downsample(variables, save_dir):
+    print("Downsampling:")
+    for s in ['train', 'test']:
+        # find minimum frequency
+        min_points = 0
+        for v in variables:
+            zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
+            z_arr = da.from_zarr(zarr_all_store)
+            if min_points == 0:
+                min_points = z_arr.shape[1]
+            elif z_arr.shape[1] < min_points:
+                min_points = z_arr.shape[1]
+        
+        # downsample based on minimum frequency
+        for v in tqdm(variables):
+            zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
+            z_arr = da.from_zarr(zarr_all_store)
+            if z_arr.shape[1] == min_points:
+                continue
+            else:
+                time_grid_mult = z_arr.shape[1] // min_points
+                downsampled = da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)).mean(axis = -1)
+                print(f"Downsampled {v} from {z_arr.shape} to {downsampled.shape}")
+                da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))
+                shutil.rmtree(zarr_all_store)
+                shutil.move(os.path.join(save_dir, s, f"{v}_x_ds.zarr"), zarr_all_store)
+                
+
+    return None
+
+
+def do_pca(save_dir, z_arr_train, z_arr_test):
+    n_dim = np.min([z_arr_train.shape[0], z_arr_train.shape[1], 1_000])
+
+    col_var = z_arr_train.var(axis=0).compute()
+    pca = PCA(n_components=n_dim)
+    pca = pca.fit(z_arr_train)
+    print("- Max var in PCA:", pca.explained_variance_ratio_.cumsum()[-1])
+    selected_dim = (
+        np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > 0.95][0] + 1
+    )
+    print(f"- Using {selected_dim} dimensions at threshold variance of 0.95.")
+    X_train = pca.transform(z_arr_train)[:, :selected_dim]
+    X_test = pca.transform(z_arr_test)[:, :selected_dim]
+    return X_train, X_test
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -285,17 +329,48 @@ if __name__ == "__main__":
         help="Does not delete temporary dir for debugging purposes.",
         action="store_true",
     )
+    parser.add_argument(
+        "-g",
+        "--match_grid",
+        help="Will mean-downsample all variables to match the sampling grid of the lowest frequency variable.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-o",
+        "--overwrite_permanent",
+        help="Will overwrite the permanent directory.",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-t",
+        "--transforms",
+        nargs="+",
+        choices = ["pca", "separate_pca", "fpca", "multivar_fpca", "none"],
+        help="What kind of downstream transforms to do and save.",
+        default=['pca'],
+    )
+    parser.add_argument(
+        "-m",
+        "--mode",
+        choices=["mean", "smooth"],
+        help="Mode of window extraction.",
+        default="mean",
+    )
 
     args = parser.parse_args()
     np.random.seed(420)
     dataset_name = f"w_{args.window_size}s_{'_'.join(args.variables)}"
+    if args.match_grid:
+        dataset_name = "downsample_" + dataset_name
+    if args.mode == "smooth":
+        dataset_name = "smooth_" + dataset_name
 
     print(
         f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
     )
 
     # make test, train and temp directories, prepare for saving
-    save_dir = os.path.join(args.save_dir, dataset_name)
+    save_dir = os.path.join(args.save_dir, dataset_name, "train_data")
     # overwrite save dir if it exists
     if os.path.exists(save_dir):
         print("Overwriting existing save directory.")
@@ -330,6 +405,7 @@ if __name__ == "__main__":
             file_path=args.data_file,
             temp_dir_path=os.path.join(temp_dir, var),
             window_size=args.window_size,
+            mode=args.mode
         )
         results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 
@@ -346,6 +422,10 @@ if __name__ == "__main__":
     # finalizing
     finalize(args.variables, split_dict, save_dir)
 
+    # downsample if we want to match the time grid
+    if args.match_grid:
+        downsample(args.variables, save_dir)
+
     # delete temp_dir
     if not args.debug:
         shutil.rmtree(temp_dir)
@@ -357,27 +437,73 @@ if __name__ == "__main__":
     print("Normalizing:")
     normalize(save_dir, args.variables)
 
-    print("Generating whole dataset:")
+    # generates final base dataset
+    print("\nGenerating whole dataset:")
     generate_final(save_dir, args.variables)
+    data_string = "x.zarr"
 
-    z_arr_train = da.from_zarr(os.path.join(save_dir, "train", "x.zarr"))
-    z_arr_test = da.from_zarr(os.path.join(save_dir, "test", "x.zarr"))
+    base_arr_train = da.from_zarr(os.path.join(save_dir, "train", data_string))
+    base_arr_test = da.from_zarr(os.path.join(save_dir, "test", data_string))
     print(
-        f"Train and test datasets generated adequately. {z_arr_train.shape[0]} windows in train and {z_arr_test.shape[0]} in test with {z_arr_train.shape[1]} dimensions."
+        f"Train and test datasets generated adequately. {base_arr_train.shape[0]} windows in train and {base_arr_test.shape[0]} in test with {base_arr_train.shape[1]} dimensions."
     )
 
-    print("Doing PCAs:")
-    n_dim = 3_000
-    pca = PCA(n_components=n_dim)
-    pca = pca.fit(z_arr_train)
-    print("Max var in PCA:", pca.explained_variance_ratio_.cumsum()[-1])
-    selected_dim = (
-        np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > 0.95][0] + 1
-    )
-    print(f"Using {selected_dim} dimensions at threshold variance of 0.95.")
-    X_train = pca.transform(z_arr_train)[:, :selected_dim]
-    X_test = pca.transform(z_arr_test)[:, :selected_dim]
-    da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"pca_x.zarr"))
-    da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"pca_x.zarr"))
+    # basically adds itself between scaling and concatenation
+    if "separate_pca" in args.transforms:
+        for v in args.variables:
+            z_arr_train = da.from_zarr(os.path.join(save_dir, "train", f"{v}_x_scaled.zarr"))
+            z_arr_test = da.from_zarr(os.path.join(save_dir, "test", f"{v}_x_scaled.zarr"))
 
-    print("Done.")
+            print(f"Doing PCA for var {v}:")
+            X_train, X_test = do_pca(save_dir, z_arr_train, z_arr_test)
+
+            da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"separate_decomp_{v}_x_scaled.zarr"), overwrite=True)
+            da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"separate_decomp_{v}_x_scaled.zarr"), overwrite=True)
+
+        print("Done.")        
+
+        print("\nGenerating separate PCA dataset:")
+        generate_final(save_dir, args.variables, transform="separate_decomp_")
+        data_string = "separate_decomp_x.zarr"
+
+        z_arr_train = da.from_zarr(os.path.join(save_dir, "train", data_string))
+        z_arr_test = da.from_zarr(os.path.join(save_dir, "test", data_string))
+        print(
+            f"Train and test datasets generated adequately with separate PCAs. {z_arr_train.shape[0]} windows in train and {z_arr_test.shape[0]} in test with {z_arr_train.shape[1]} dimensions."
+        )
+
+    if "pca" in args.transforms:
+        print("Doing global PCA")
+        X_train, X_test = do_pca(save_dir, base_arr_train, base_arr_test)
+        print(
+            f"Train and test datasets generated adequately with combined PCAs. {X_train.shape[0]} windows in train and {X_test.shape[0]} in test with {X_train.shape[1]} dimensions."
+        )
+        da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"pca_x.zarr"))
+        da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"pca_x.zarr"))
+        
+        print("Done.")
+
+    # clean up in scaled
+    for s in ['train', 'test']:
+        for f in os.listdir(os.path.join(save_dir, s)):
+            if "_scaled" in f:
+                shutil.rmtree(os.path.join(save_dir, s, f))
+
+
+    if os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent")) and not args.overwrite_permanent:
+        print("WARNING: not overwriting permanent to avoid data chaos, current run in train_data. The latter will get overwritten if run again")
+    elif not os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent")):
+        shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
+    else:
+        shutil.rmtree(os.path.join(args.save_dir, dataset_name, "permanent"))
+        shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
+
+
+    X_train = da.from_zarr(os.path.join(args.save_dir, dataset_name, "permanent", 'train', 'x.zarr'))
+    labels = pd.read_pickle(os.path.join(args.save_dir, dataset_name, "permanent", 'train', "labels.pkl"))
+    y_train = labels["in?"].astype(int)
+    groups = labels["ptid"].astype(str)
+
+    y_train = y_train.dropna()
+    print(y_train.sum() / y_train.shape[0], "of training windows are inside AR limits when smoothed.")
+    
