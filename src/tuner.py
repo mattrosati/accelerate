@@ -78,6 +78,7 @@ class RayAdaptiveRepeatedCVSearch:
         rank_metric="mean_val_auc",
         mode="max",
         store_path="./ray_results",
+        model_name="base",
     ):
         """
         estimator: sklearn estimator class (e.g. RandomForestClassifier)
@@ -102,6 +103,7 @@ class RayAdaptiveRepeatedCVSearch:
         self.best_estimator_ = None
         self.analysis = None
         self.store_path = store_path
+        self.model_name = model_name
 
         if isinstance(self.cv, list):
             self.n_splits, self.n_repeats = self.cv[0], self.cv[1]
@@ -178,7 +180,7 @@ class RayAdaptiveRepeatedCVSearch:
                         num_samples=self.num_samples,
                     ),
                     run_config=tune.RunConfig(
-                        name="adaptive_repeated_cv_search",
+                        name=self.model_name,
                         verbose=1,
                         failure_config=tune.FailureConfig(fail_fast=False),
                         storage_path=self.store_path,
