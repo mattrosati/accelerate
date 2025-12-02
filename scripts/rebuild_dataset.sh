@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=accelerate-build
+#SBATCH --begin=now
+#SBATCH --job-name=acc-build
 #SBATCH --output=logs/output_build_%A.out
 #SBATCH --error=logs/output_build_%A.out
 #SBATCH --partition day                           # Train on day
 #SBATCH --requeue
 #SBATCH --mem-per-cpu=40G 
-#SBATCH --cpus-per-task=8                      
+#SBATCH --cpus-per-task=20                      
 #SBATCH --time=1-00:00:00                         # Time limit hrs:min:sec
 
 date;hostname;pwd
@@ -27,5 +28,5 @@ cd /home/mr2238/accelerate
 
 # python src/train_test_split.py
 
-python -u src/data_extract.py -g -o -t separate_pca pca -m smooth
-python -u src/data_extract.py -o -t separate_pca pca -m smooth
+python -u src/data_extract.py -g -o -t separate_pca pca -w 1200 -v rso2r rso2l abp -m smooth
+python -u src/data_extract.py -g -o -t separate_pca pca -w 1200 -s robust -v rso2r rso2l abp -m smooth

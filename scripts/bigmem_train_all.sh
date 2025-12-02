@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --array=0-17                      # Update this range to match the number of runs
+#SBATCH --array=0-3                      # Update this range to match the number of runs
 #SBATCH --partition=day
 #SBATCH --requeue
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=10G
-#SBATCH --cpus-per-task=40
+#SBATCH --mem-per-cpu=80G
+#SBATCH --cpus-per-task=10
 #SBATCH --time=1-00:00:00
 
 date;hostname;pwd
@@ -13,10 +13,10 @@ module load miniconda
 conda activate cppopt-dl
 
 cd /home/mr2238/accelerate
-echo "Normal train"
+echo "Big mem train"
 
 # Select model based on list of args
-PARAM_LIST="/home/mr2238/accelerate/scripts/train_all_array.txt"
+PARAM_LIST="/home/mr2238/accelerate/scripts/bigmem_train_all_array.txt"
 PARAMS=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$PARAM_LIST")
 
 echo "Training with params: $PARAMS"

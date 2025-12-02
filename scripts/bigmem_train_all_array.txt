@@ -1,0 +1,4 @@
+-d --model rocket --data_mode raw
+-d --model knn_multivar --data_mode raw
+--model rocket --data_mode raw
+--model knn_multivar --data_mode raw
