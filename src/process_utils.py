@@ -7,9 +7,10 @@ import pandas as pd
 
 from constants import *
 
+
 def merge_quality_intervals(valid_df, bad_df):
-    pd.options.display.float_format = '{:.0f}'.format
-    
+    pd.options.display.float_format = "{:.0f}".format
+
     # Ensure segment_id exists (assign if not)
     if "segment_id" not in valid_df.columns:
         valid_df = valid_df.copy()
@@ -20,19 +21,19 @@ def merge_quality_intervals(valid_df, bad_df):
 
     # Valid segment events
     for _, r in valid_df.iterrows():
-        events.append((r.starttime,  1,  "valid", r.segment_id, r.frequency))
-        events.append((r.endtime,   -1, "valid", r.segment_id, r.frequency))
+        events.append((r.starttime, 1, "valid", r.segment_id, r.frequency))
+        events.append((r.endtime, -1, "valid", r.segment_id, r.frequency))
 
     # Bad-quality events
     for _, r in bad_df.iterrows():
-        events.append((r.starttime,  1,  "bad", None, None))
-        events.append((r.endtime,   -1, "bad", None, None))
+        events.append((r.starttime, 1, "bad", None, None))
+        events.append((r.endtime, -1, "bad", None, None))
 
     # Sort by time, with end(-1) before start(+1)
     events = sorted(events, key=lambda x: (x[0], x[1]))
 
     # Sweep-line state
-    active_segments = {}     # segment_id → frequency
+    active_segments = {}  # segment_id → frequency
     bad_active = 0
     current_start = None
     current_seg = None
@@ -44,12 +45,14 @@ def merge_quality_intervals(valid_df, bad_df):
 
         # If we were in a "good" region and it's ending
         if active_segments and bad_active == 0 and current_start is not None:
-            pieces.append({
-                "segment_id": current_seg,
-                "starttime": current_start,
-                "endtime": t,
-                "frequency": current_freq
-            })
+            pieces.append(
+                {
+                    "segment_id": current_seg,
+                    "starttime": current_start,
+                    "endtime": t,
+                    "frequency": current_freq,
+                }
+            )
             current_start = None
 
         # Update state
@@ -74,7 +77,6 @@ def merge_quality_intervals(valid_df, bad_df):
     # If no pieces exist (all bad), return empty
     if pieces_df.empty:
         return pieces_df
-
 
     # Finalize (recompute length + startidx)
     final = finalize_segments(pieces_df, valid_df)
@@ -134,20 +136,20 @@ def extract_proportions(windows, labels, percentage=0.5, strategy="count", ref=N
 
 def extract_proportions_smooth(windows, labels, percentage, ref):
     in_out = np.empty(shape=len(windows), dtype=bool)
-    for i, w in enumerate(windows):       
+    for i, w in enumerate(windows):
         start = labels["start_idx"].iloc[ref[i]]
         end = labels["end_idx"].iloc[ref[i]]
         lower_limits = labels["LLA_Yale_affected_beta"].loc[start:end]
         upper_limits = labels["ULA_Yale_affected_beta"].loc[start:end]
 
         w_vector = w["w"]
-        
+
         if w["total_length"].sum() == 0:
             print("Record with no windows, unclear why")
 
         # split in minute by minute
         intervals = len(lower_limits)
-        split_window = w_vector.reshape((intervals, -1), order='C')
+        split_window = w_vector.reshape((intervals, -1), order="C")
 
         # find average of window
         if (np.isnan(split_window)).all(axis=1).any():
@@ -158,7 +160,7 @@ def extract_proportions_smooth(windows, labels, percentage, ref):
         mean_arr = np.nanmean(split_window, axis=1)
 
         # find fraction of time outside limits
-        out = ((mean_arr < lower_limits.values) | (mean_arr > upper_limits.values))
+        out = (mean_arr < lower_limits.values) | (mean_arr > upper_limits.values)
         frac_out = out.mean()
 
         # set true if outside <= 20% of the time
@@ -373,21 +375,38 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         ).astype(np.int64)
 
         # add segments with non-zero quality to index to filter bad quality out
-        quality = pd.DataFrame(f[f"{ptid}/raw/{v_long}"].attrs["quality"]) # df with columns: time, quality code
-        assert quality["value"].isna().sum() == 0, "Unexpected: quality value contains nas"
+        quality = pd.DataFrame(
+            f[f"{ptid}/raw/{v_long}"].attrs["quality"]
+        )  # df with columns: time, quality code
+        assert (
+            quality["value"].isna().sum() == 0
+        ), "Unexpected: quality value contains nas"
         # shift to get end time of quality segments
-        quality['endtime'] = quality['time'].shift(-1, fill_value = ts_index['endtime'].max())
-        quality.rename(columns={'time': 'starttime'}, inplace=True)
-        
+        quality["endtime"] = quality["time"].shift(
+            -1, fill_value=ts_index["endtime"].max()
+        )
+        quality.rename(columns={"time": "starttime"}, inplace=True)
+
         # find segments with non-zero quality
         problem_segments = quality[quality["value"] != 0]
 
         # merge
         ts_index = merge_quality_intervals(ts_index, problem_segments.copy())
-        
-        if np.any(ts_index.endtime > ts_index.starttime.shift(-1, fill_value = ts_index.endtime.max())):
+
+        if np.any(
+            ts_index.endtime
+            > ts_index.starttime.shift(-1, fill_value=ts_index.endtime.max())
+        ):
             print("Warning: overlapping segments detected after quality merging.")
-            print(pd.concat([ts_index.endtime, ts_index.starttime.shift(-1, fill_value = ts_index.endtime.max())], axis=1))
+            print(
+                pd.concat(
+                    [
+                        ts_index.endtime,
+                        ts_index.starttime.shift(-1, fill_value=ts_index.endtime.max()),
+                    ],
+                    axis=1,
+                )
+            )
             print(v, ptid)
 
         # select label timepoints in segments
@@ -402,7 +421,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         first_idx = np.argmax(in_segment, axis=0)
 
         labels["segment"] = pd.Series(first_idx, index=labels.index)
-        labels = labels[mask] # keep only labels that fall within the segments
+        labels = labels[mask]  # keep only labels that fall within the segments
 
         if labels.shape[0] != 0:
             # select out the windows
@@ -418,14 +437,14 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                     if labels["start_idx"].iloc[i] in labels.index:
                         d = np.append(d, i)
                         df2.append([d])
-                df = np.concatenate(df2, axis = 0)
+                df = np.concatenate(df2, axis=0)
 
             # in_out computation should not be based on imputed values
             if v == "abp":
                 windows = [
                     {"w": ts[i[0] : i[1]], "overlap_len": i[2], "total_length": i[3]}
                     for i in df
-                ] 
+                ]
                 ref = None
                 if strategy == "smooth":
                     ref = list([int(v[4]) for v in df])
@@ -466,7 +485,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
 
                 # drop ref
                 df = np.array(df)[:, :4]
-                
+
                 df = pd.DataFrame(
                     df, columns=["startidx", "endidx", "overlap_len", "tot_len"]
                 )

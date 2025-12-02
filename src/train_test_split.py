@@ -83,16 +83,31 @@ if __name__ == "__main__":
         # append row of pt, % in, time to mapopt
         df_rows.append([pt, 1 - in_percent, time_to_mapopt, in_out_df.shape[0]])
 
-    df = pd.DataFrame(df_rows, columns=["ptid", "out_percent", "to_mapopt_s", "seg_len"]).dropna()
+    df = pd.DataFrame(
+        df_rows, columns=["ptid", "out_percent", "to_mapopt_s", "seg_len"]
+    ).dropna()
 
     # make keys by cutting into tertiles for out_percent, time to map opt, and length
     df["out_percent_cat"] = pd.qcut(df["out_percent"], q=3, labels=False)
     df["mapopt_cat"] = pd.qcut(df["to_mapopt_s"], q=3, labels=False)
     df["seg_len_cat"] = pd.qcut(df["seg_len"], q=3, labels=False)
-    df["class"] = df["out_percent_cat"].astype(str) + df["mapopt_cat"].astype(str) + df["seg_len_cat"].astype(str)
+    df["class"] = (
+        df["out_percent_cat"].astype(str)
+        + df["mapopt_cat"].astype(str)
+        + df["seg_len_cat"].astype(str)
+    )
 
     print(df)
-    print(df.describe(percentiles=[.25, .5, .75, .90,]))
+    print(
+        df.describe(
+            percentiles=[
+                0.25,
+                0.5,
+                0.75,
+                0.90,
+            ]
+        )
+    )
     print(df["class"].value_counts())
 
     keys = df["class"]

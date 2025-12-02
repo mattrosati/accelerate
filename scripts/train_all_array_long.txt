@@ -1,5 +1,0 @@
---model svm --data_mode pca
---model svm --data_mode separate_pca
---model svm --data_mode raw
---model rand_forest --data_mode raw
---model xgb --data_mode raw

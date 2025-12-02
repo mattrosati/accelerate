@@ -9,6 +9,7 @@ from ray.tune.search.optuna import OptunaSearch
 from ray.tune.search import ConcurrencyLimiter
 import optuna
 
+
 def train_cv(config, X, y, folds, estimator, scoring):
 
     model = estimator.set_params(**config)
@@ -36,7 +37,7 @@ def train_cv(config, X, y, folds, estimator, scoring):
                 metrics[f"mean_train_{key}"] = float(np.mean([scores_train[key]]))
 
                 metrics[f"std_val_{key}"] = 0.0
-                metrics[f"std_train_{key}"] = 0.0 
+                metrics[f"std_train_{key}"] = 0.0
         else:
             for key in scores_train.keys():
                 summary[f"train_{key}"].append(scores_train[key])
@@ -48,7 +49,6 @@ def train_cv(config, X, y, folds, estimator, scoring):
                 metrics[f"std_val_{key}"] = float(np.std(summary[f"val_{key}"]))
                 metrics[f"std_train_{key}"] = float(np.std(summary[f"train_{key}"]))
 
-        
         fold_summary = metrics | {"fold": fold_idx}
 
         tune.report(metrics=fold_summary)
@@ -74,7 +74,7 @@ class RayAdaptiveRepeatedCVSearch:
         grace_period=6,
         reduction_factor=2,
         num_samples=50,
-        scoring='roc_auc',
+        scoring="roc_auc",
         rank_metric="mean_val_auc",
         mode="max",
         store_path="./ray_results",
@@ -90,7 +90,9 @@ class RayAdaptiveRepeatedCVSearch:
         """
         self.estimator = estimator
         self.search_space = search_space
-        self.cv = cv if cv is not None else RepeatedStratifiedKFold(n_splits=5, n_repeats=3)
+        self.cv = (
+            cv if cv is not None else RepeatedStratifiedKFold(n_splits=5, n_repeats=3)
+        )
         self.grace_period = grace_period
         self.reduction_factor = reduction_factor
         self.num_samples = num_samples
@@ -114,21 +116,17 @@ class RayAdaptiveRepeatedCVSearch:
         else:
             self.folds = list(self._make_repeated_stratified_group_kfold(X, y, groups))
 
-
     def _make_repeated_stratified_group_kfold(self, X, y, groups, random_state=42):
         n_splits = self.n_splits
         n_repeats = self.n_repeats
-        
+
         for r in range(n_repeats):
             sgkf = StratifiedGroupKFold(
-                n_splits=n_splits,
-                shuffle=True,
-                random_state=random_state
+                n_splits=n_splits, shuffle=True, random_state=random_state
             )
             for train_idx, val_idx in sgkf.split(X, y, groups):
                 yield train_idx, val_idx
 
-    
     def fit(self, X, y, groups=None):
 
         self._build_folds(X, y, groups=groups)
@@ -154,8 +152,8 @@ class RayAdaptiveRepeatedCVSearch:
         # -------------------------------
         searcher = OptunaSearch(
             sampler=optuna.samplers.TPESampler(
-                multivariate=True,        # better exploration
-                group=True,               # improves correlated parameters
+                multivariate=True,  # better exploration
+                group=True,  # improves correlated parameters
                 n_startup_trials=10,
                 constant_liar=True,
             ),
@@ -170,22 +168,22 @@ class RayAdaptiveRepeatedCVSearch:
             scoring=self.scoring,
         )
         tuner = tune.Tuner(
-                    trainable,
-                    param_space=self.search_space,
-                    tune_config=tune.TuneConfig(
-                        metric=self.rank_metric,
-                        mode=self.mode,
-                        scheduler=scheduler,
-                        search_alg=searcher,
-                        num_samples=self.num_samples,
-                    ),
-                    run_config=tune.RunConfig(
-                        name=self.model_name,
-                        verbose=1,
-                        failure_config=tune.FailureConfig(fail_fast=False),
-                        storage_path=self.store_path,
-                    ),
-                )
+            trainable,
+            param_space=self.search_space,
+            tune_config=tune.TuneConfig(
+                metric=self.rank_metric,
+                mode=self.mode,
+                scheduler=scheduler,
+                search_alg=searcher,
+                num_samples=self.num_samples,
+            ),
+            run_config=tune.RunConfig(
+                name=self.model_name,
+                verbose=1,
+                failure_config=tune.FailureConfig(fail_fast=False),
+                storage_path=self.store_path,
+            ),
+        )
 
         self.results = tuner.fit()
 
@@ -193,8 +191,7 @@ class RayAdaptiveRepeatedCVSearch:
         # Extract best config
         # -------------------------------------------------------
         self.best_config = self.results.get_best_result(
-            metric=self.rank_metric,
-            mode=self.mode
+            metric=self.rank_metric, mode=self.mode
         ).config
 
         # -------------------------------------------------------
@@ -220,4 +217,6 @@ class RayAdaptiveRepeatedCVSearch:
         return self.analysis.best_result.get(self.metric)
 
     def cv_results_(self):
-        return self.results.get_dataframe().sort_values(by=self.rank_metric, ascending=(self.mode=="min"))
+        return self.results.get_dataframe().sort_values(
+            by=self.rank_metric, ascending=(self.mode == "min")
+        )

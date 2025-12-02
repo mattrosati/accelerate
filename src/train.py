@@ -57,27 +57,36 @@ if __name__ == "__main__":
         "-m",
         type=str,
         help="Type of model to train",
-        choices=["log_reg", "svm", "knn", "rand_forest", "decision_tree", "xgb", "rocket", "knn_multivar"],
+        choices=[
+            "log_reg",
+            "svm",
+            "knn",
+            "rand_forest",
+            "decision_tree",
+            "xgb",
+            "rocket",
+            "knn_multivar",
+        ],
         required=True,
     )
     parser.add_argument(
         "--data_mode",
         type=str,
-        choices=['raw', 'pca', 'fpca', 'separate_pca'],
+        choices=["raw", "pca", "fpca", "separate_pca"],
         help="Transofrmations applied to mode prior to loading.",
-        default='raw',
+        default="raw",
     )
     parser.add_argument(
-        '-d',
-        '--debug',
+        "-d",
+        "--debug",
         action="store_true",
-        help="Trains on smaller subset of data. Saves models separately."
+        help="Trains on smaller subset of data. Saves models separately.",
     )
     parser.add_argument(
-        '--run_name',
+        "--run_name",
         type=str,
         default="",
-        help="Names run, defaults to timestamp if empty."
+        help="Names run, defaults to timestamp if empty.",
     )
 
     args = parser.parse_args()
@@ -85,18 +94,20 @@ if __name__ == "__main__":
     random.seed(420)
 
     print(f"Training model {args.model} with {args.data_mode} embeddings.")
-    
+
     # decide what embeddings to use and load data
-    if args.data_mode == 'raw':
-        f = 'x.zarr'
-    elif args.data_mode == 'pca':
-        f = 'pca_x.zarr'
-    elif args.data_mode == 'fpca':
-        f = 'fpca_x.zarr'
-    elif args.data_mode == 'separate_pca':
-        f = 'separate_decomp_x.zarr'
-    X_train = da.from_zarr(os.path.join(args.train_dir, 'permanent', 'train', f))
-    labels = pd.read_pickle(os.path.join(args.train_dir, 'permanent', 'train', "labels.pkl"))
+    if args.data_mode == "raw":
+        f = "x.zarr"
+    elif args.data_mode == "pca":
+        f = "pca_x.zarr"
+    elif args.data_mode == "fpca":
+        f = "fpca_x.zarr"
+    elif args.data_mode == "separate_pca":
+        f = "separate_decomp_x.zarr"
+    X_train = da.from_zarr(os.path.join(args.train_dir, "permanent", "train", f))
+    labels = pd.read_pickle(
+        os.path.join(args.train_dir, "permanent", "train", "labels.pkl")
+    )
     y_train = labels["in?"].astype(int)
     groups = labels["ptid"].astype(str)
 
@@ -116,41 +127,41 @@ if __name__ == "__main__":
         run_name = datetime.now().strftime("%Y-%m-%d_%H:%M")
     else:
         run_name = args.run_name
-    models_dir_name = 'models_debug' if args.debug else "models"
+    models_dir_name = "models_debug" if args.debug else "models"
     models_dir_name = f"{models_dir_name}_{run_name}"
     model_store = os.path.join(args.train_dir, models_dir_name)
     os.makedirs(model_store, exist_ok=True)
 
     # init accuracies
     metrics = {
-        'auc': 'roc_auc',
-        'balanced_accuracy': 'balanced_accuracy',
+        "auc": "roc_auc",
+        "balanced_accuracy": "balanced_accuracy",
     }
 
     # init model
     n_iter = 30
     multivar = False
     if args.model == "log_reg":
-        model = LogisticRegression(n_jobs=1, solver='saga', max_iter=10_000)
+        model = LogisticRegression(n_jobs=1, solver="saga", max_iter=10_000)
         params = {
             "penalty": tune.choice(["l2", "l1"]),
-            "C":  tune.loguniform(0.001, 100),
+            "C": tune.loguniform(0.001, 100),
         }
     elif args.model == "decision_tree":
         model = DecisionTreeClassifier()
         params = {
-            'max_depth': tune.qrandint(5, 50, 5),
-            'max_features': tune.choice([0.02, 0.05, 0.1, 'sqrt']),
-            'min_samples_split': tune.randint(2, 25),
-            'min_samples_leaf': tune.randint(1, 15),
-            'class_weight': tune.choice([None, 'balanced']),
+            "max_depth": tune.qrandint(5, 50, 5),
+            "max_features": tune.choice([0.02, 0.05, 0.1, "sqrt"]),
+            "min_samples_split": tune.randint(2, 25),
+            "min_samples_leaf": tune.randint(1, 15),
+            "class_weight": tune.choice([None, "balanced"]),
         }
         n_iter = len(list(params.keys())) * 10
     elif args.model == "svm":
         model = svm.SVC()
         params = {
-            "C":  tune.loguniform(0.001, 100),
-            "gamma":  tune.loguniform(1/(X_train.shape[1]**3), 0.01),
+            "C": tune.loguniform(0.001, 100),
+            "gamma": tune.loguniform(1 / (X_train.shape[1] ** 3), 0.01),
         }
     elif args.model == "knn":
         model = KNeighborsClassifier(n_jobs=1)
@@ -161,25 +172,25 @@ if __name__ == "__main__":
     elif args.model == "rand_forest":
         model = RandomForestClassifier()
         params = {
-            'n_estimators': tune.lograndint(50, 0.05 * X_train.shape[0]),
-            'max_depth': tune.qrandint(5, 50, 5),
-            'max_features': tune.choice([0.02, 0.05, 0.1, 'sqrt']),
-            'min_samples_split': tune.randint(2, 25),
-            'min_samples_leaf': tune.randint(1, 15),
-            'class_weight': tune.choice([None, 'balanced']),
+            "n_estimators": tune.lograndint(50, 0.05 * X_train.shape[0]),
+            "max_depth": tune.qrandint(5, 50, 5),
+            "max_features": tune.choice([0.02, 0.05, 0.1, "sqrt"]),
+            "min_samples_split": tune.randint(2, 25),
+            "min_samples_leaf": tune.randint(1, 15),
+            "class_weight": tune.choice([None, "balanced"]),
         }
         n_iter = (len(list(params.keys())) - 1) * 10
     elif args.model == "xgb":
-        model = xgb.XGBClassifier(tree_method="hist", eval_metric='logloss')
+        model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
         params = {
-            'n_estimators': tune.lograndint(50, 0.05 * X_train.shape[0]),
-            'max_depth': tune.randint(2, 10),
-            'learning_rate': tune.loguniform(1e-5, 1e-1),
-            'subsample': tune.quniform(0.25, 0.75, 0.05),
-            'colsample_bytree': tune.quniform(0.5, 1.0, 0.05),
-            'gamma': tune.quniform(0, 5, 0.25),
-            'reg_alpha': tune.loguniform(1e-5, 20.0),
-            'reg_lambda': tune.loguniform(1e-5, 20.0),
+            "n_estimators": tune.lograndint(50, 0.05 * X_train.shape[0]),
+            "max_depth": tune.randint(2, 10),
+            "learning_rate": tune.loguniform(1e-5, 1e-1),
+            "subsample": tune.quniform(0.25, 0.75, 0.05),
+            "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
+            "gamma": tune.quniform(0, 5, 0.25),
+            "reg_alpha": tune.loguniform(1e-5, 20.0),
+            "reg_lambda": tune.loguniform(1e-5, 20.0),
         }
         n_iter = (len(list(params.keys())) - 2) * 10
     elif args.model == "rocket":
@@ -188,8 +199,8 @@ if __name__ == "__main__":
             "n_kernels": tune.choice([5_000, 10_000, 15_000]),
             "max_dilations_per_kernel": tune.choice([32, 64]),
             "n_features_per_kernel": tune.qrandint(4, 16, 2),
-            "estimator__alpha": tune.loguniform(1e-3, 1e3),   # Ridge reg
-            'class_weight': tune.choice([None, 'balanced']),
+            "estimator__alpha": tune.loguniform(1e-3, 1e3),  # Ridge reg
+            "class_weight": tune.choice([None, "balanced"]),
         }
         model = MultiRocketClassifier(estimator=RidgeClassifier())
     elif args.model == "knn_multivar":
@@ -205,14 +216,13 @@ if __name__ == "__main__":
         # needs params
         # needs model
 
-
-    cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3) # repeats five folds 2 times
+    cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3)  # repeats five folds 2 times
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
         scoring=metrics,
         num_samples=n_iter,
-        rank_metric='mean_val_auc',
+        rank_metric="mean_val_auc",
         cv=[5, 3],
         store_path=model_store,
         model_name=f"{args.model}_{args.data_mode}",
@@ -240,7 +250,9 @@ if __name__ == "__main__":
         # Reshape to AEON format: (N, num_channels, timesteps)
         X_train = X_train.reshape(X_train.shape[0], num_channels, timesteps)
         print(f"Reshaped training set to {X_train.shape}")
-    assert not (multivar and "downsample" not in args.train_dir), "Cannot train multivariable model on not downsampled data."
+    assert not (
+        multivar and "downsample" not in args.train_dir
+    ), "Cannot train multivariable model on not downsampled data."
 
     # train
     search = search.fit(X_train, y_train, groups=groups)
@@ -254,6 +266,5 @@ if __name__ == "__main__":
     print("Search results:")
     df = pd.DataFrame(search.cv_results_())
     print(df)
-
 
     # results will be saved in ray tuner logs

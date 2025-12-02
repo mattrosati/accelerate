@@ -307,9 +307,10 @@ def finalize(variables, split_dict, save_dir):
 
     return None
 
+
 def downsample(variables, save_dir):
     print("Downsampling:")
-    for s in ['train', 'test']:
+    for s in ["train", "test"]:
         # find minimum frequency
         min_points = 0
         for v in variables:
@@ -319,7 +320,7 @@ def downsample(variables, save_dir):
                 min_points = z_arr.shape[1]
             elif z_arr.shape[1] < min_points:
                 min_points = z_arr.shape[1]
-        
+
         # downsample based on minimum frequency
         for v in tqdm(variables):
             zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
@@ -328,12 +329,13 @@ def downsample(variables, save_dir):
                 continue
             else:
                 time_grid_mult = z_arr.shape[1] // min_points
-                downsampled = da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)).mean(axis = -1)
+                downsampled = da.reshape(
+                    z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
+                ).mean(axis=-1)
                 print(f"Downsampled {v} from {z_arr.shape} to {downsampled.shape}")
                 da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))
                 shutil.rmtree(zarr_all_store)
                 shutil.move(os.path.join(save_dir, s, f"{v}_x_ds.zarr"), zarr_all_store)
-                
 
     return None
 
@@ -354,6 +356,7 @@ def do_pca(save_dir, z_arr_train, z_arr_test):
     X_train = pca.transform(z_arr_train)[:, :selected_dim]
     X_test = pca.transform(z_arr_test)[:, :selected_dim]
     return X_train, X_test
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -404,9 +407,9 @@ if __name__ == "__main__":
         "-t",
         "--transforms",
         nargs="+",
-        choices = ["pca", "separate_pca", "fpca", "multivar_fpca", "none"],
+        choices=["pca", "separate_pca", "fpca", "multivar_fpca", "none"],
         help="What kind of downstream transforms to do and save.",
-        default=['pca'],
+        default=["pca"],
     )
     parser.add_argument(
         "-m",
@@ -425,7 +428,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     np.random.seed(420)
-    pd.options.display.float_format = '{:.0f}'.format
+    pd.options.display.float_format = "{:.0f}".format
     dataset_name = f"w_{args.window_size}s_{'_'.join(args.variables)}"
     if args.match_grid:
         dataset_name = "downsample_" + dataset_name
@@ -474,7 +477,7 @@ if __name__ == "__main__":
             file_path=args.data_file,
             temp_dir_path=os.path.join(temp_dir, var),
             window_size=args.window_size,
-            mode=args.mode
+            mode=args.mode,
         )
         results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 
@@ -504,7 +507,7 @@ if __name__ == "__main__":
     # preprocess dataset
     # normalize (imputation already done)
     print("Normalizing:")
-    normalize(save_dir, args.variables, scaler = args.scaler)
+    normalize(save_dir, args.variables, scaler=args.scaler)
 
     # generates final base dataset
     print("\nGenerating whole dataset:")
@@ -520,16 +523,32 @@ if __name__ == "__main__":
     # basically adds itself between scaling and concatenation
     if "separate_pca" in args.transforms:
         for v in args.variables:
-            z_arr_train = da.from_zarr(os.path.join(save_dir, "train", f"{v}_x_scaled.zarr"))
-            z_arr_test = da.from_zarr(os.path.join(save_dir, "test", f"{v}_x_scaled.zarr"))
+            z_arr_train = da.from_zarr(
+                os.path.join(save_dir, "train", f"{v}_x_scaled.zarr")
+            )
+            z_arr_test = da.from_zarr(
+                os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
+            )
 
             print(f"Doing PCA for var {v}:")
             X_train, X_test = do_pca(save_dir, z_arr_train, z_arr_test)
 
-            da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"separate_decomp_{v}_x_scaled.zarr"), overwrite=True)
-            da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"separate_decomp_{v}_x_scaled.zarr"), overwrite=True)
+            da.to_zarr(
+                X_train,
+                url=os.path.join(
+                    save_dir, "train", f"separate_decomp_{v}_x_scaled.zarr"
+                ),
+                overwrite=True,
+            )
+            da.to_zarr(
+                X_test,
+                url=os.path.join(
+                    save_dir, "test", f"separate_decomp_{v}_x_scaled.zarr"
+                ),
+                overwrite=True,
+            )
 
-        print("Done.")        
+        print("Done.")
 
         print("\nGenerating separate PCA dataset:")
         generate_final(save_dir, args.variables, transform="separate_decomp_")
@@ -549,30 +568,38 @@ if __name__ == "__main__":
         )
         da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"pca_x.zarr"))
         da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"pca_x.zarr"))
-        
+
         print("Done.")
 
     # clean up in scaled
-    for s in ['train', 'test']:
+    for s in ["train", "test"]:
         for f in os.listdir(os.path.join(save_dir, s)):
             if "_scaled" in f:
                 shutil.rmtree(os.path.join(save_dir, s, f))
 
-
-    if os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent")) and not args.overwrite_permanent:
-        print("WARNING: not overwriting permanent to avoid data chaos, current run in train_data. The latter will get overwritten if run again")
+    if (
+        os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent"))
+        and not args.overwrite_permanent
+    ):
+        print(
+            "WARNING: not overwriting permanent to avoid data chaos, current run in train_data. The latter will get overwritten if run again"
+        )
     elif not os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent")):
         shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
     else:
         shutil.rmtree(os.path.join(args.save_dir, dataset_name, "permanent"))
         shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
 
-
-    X_train = da.from_zarr(os.path.join(args.save_dir, dataset_name, "permanent", 'train', 'x.zarr'))
-    labels = pd.read_pickle(os.path.join(args.save_dir, dataset_name, "permanent", 'train', "labels.pkl"))
+    X_train = da.from_zarr(
+        os.path.join(args.save_dir, dataset_name, "permanent", "train", "x.zarr")
+    )
+    labels = pd.read_pickle(
+        os.path.join(args.save_dir, dataset_name, "permanent", "train", "labels.pkl")
+    )
     y_train = labels["in?"].astype(int)
     groups = labels["ptid"].astype(str)
 
     y_train = y_train.dropna()
-    print(f"{y_train.sum() / y_train.shape[0] * 100:0.1f}% of training windows are inside AR limits for mode {args.mode}.")
-    
+    print(
+        f"{y_train.sum() / y_train.shape[0] * 100:0.1f}% of training windows are inside AR limits for mode {args.mode}."
+    )

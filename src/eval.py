@@ -27,9 +27,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--subset",
         type=str,
-        choices=['raw', 'pca', 'fpca', 'all', 'separate_decomp'],
+        choices=["raw", "pca", "fpca", "all", "separate_decomp"],
         help="Subset of data types to evaluate all models.",
-        default='all',
+        default="all",
     )
     parser.add_argument(
         "--small",
@@ -49,43 +49,46 @@ if __name__ == "__main__":
     print(f"Testing all models with {args.subset} embeddings.")
     if args.small:
         print("Note: small dataset models.")
-    
+
     # loop through data types
     if args.subset == "all":
-        data_types = ['raw', 'pca', 'fpca', 'separate_decomp']
+        data_types = ["raw", "pca", "fpca", "separate_decomp"]
     else:
         data_types = [args.subset]
-    
+
     model_dir = "models_debug" if args.small else "models"
     model_dir = model_dir + f"_{args.run_name}" if args.run_name != "" else model_dir
     model_store = os.path.join(args.train_dir, model_dir)
     assert os.path.isdir(model_store)
-    
+
     rows = []
 
-    # dataset has model, embedding mode, train metrics, test metrics 
+    # dataset has model, embedding mode, train metrics, test metrics
     for mode in data_types:
-        if mode == 'fpca':
-            continue # TODO: remove once implemented
+        if mode == "fpca":
+            continue  # TODO: remove once implemented
         print(f"\nEvaluating models for {mode}.")
-        
 
         # load test data
-        data_string = f'{mode}_x.zarr' if mode != "raw" else 'x.zarr'
-        X = da.from_zarr(os.path.join(args.train_dir, 'permanent', 'test', data_string))
-        labels = pd.read_pickle(os.path.join(args.train_dir, 'permanent', 'test', "labels.pkl"))
+        data_string = f"{mode}_x.zarr" if mode != "raw" else "x.zarr"
+        X = da.from_zarr(os.path.join(args.train_dir, "permanent", "test", data_string))
+        labels = pd.read_pickle(
+            os.path.join(args.train_dir, "permanent", "test", "labels.pkl")
+        )
         y = labels["in?"].astype(int)
-    
+
         # loop over directory of models
         if "adaptive_repeated_cv_search" in os.listdir(model_store):
             # load results, best model and evaluate
             for f in os.listdir(model_store):
                 r = {}
-                check = f.replace("_separate_pca", "_separate_decomp") # this is bc I made some bad naming practices earlier
+                check = f.replace(
+                    "_separate_pca", "_separate_decomp"
+                )  # this is bc I made some bad naming practices earlier
                 # load search
                 if not check.endswith(f"{mode}.pkl"):
                     continue
-                model = load(open(os.path.join(model_store, f), 'rb'))
+                model = load(open(os.path.join(model_store, f), "rb"))
 
                 # print model name and evaluate
                 model_name = model.__class__.__name__
@@ -94,13 +97,18 @@ if __name__ == "__main__":
 
                 # extract training metrics
                 model_string = f.removesuffix(f".pkl")
-                results_df = pd.read_csv(os.path.join(model_store, f"{model_string}_cv_results.csv"))
+                results_df = pd.read_csv(
+                    os.path.join(model_store, f"{model_string}_cv_results.csv")
+                )
                 print(results_df)
                 best = results_df.iloc[0]
-                of_interest = [col for col in best.columns if (("mean" in col or "std" in col) and "time" not in col)]
+                of_interest = [
+                    col
+                    for col in best.columns
+                    if (("mean" in col or "std" in col) and "time" not in col)
+                ]
                 best = best[of_interest]
                 print(best.T)
-                
 
                 # calculate testing metrics
                 estimator = model
@@ -109,10 +117,10 @@ if __name__ == "__main__":
                     y_pred = (y_prob >= 0.5).astype(int)
                 else:
                     y_prob = estimator.decision_function(X)
-                    y_pred = (y_prob >= 0).astype(int)  
+                    y_pred = (y_prob >= 0).astype(int)
 
-                r['test_balanced_accuracy'] = balanced_accuracy_score(y, y_pred)
-                r['test_auc'] = roc_auc_score(y, y_prob)
+                r["test_balanced_accuracy"] = balanced_accuracy_score(y, y_pred)
+                r["test_auc"] = roc_auc_score(y, y_prob)
 
                 r["mode"] = mode
                 r["model"] = model_name
@@ -121,11 +129,13 @@ if __name__ == "__main__":
         else:
             for f in os.listdir(model_store):
                 r = {}
-                check = f.replace("_separate_pca", "_separate_decomp") # this is bc I made some bad naming practices earlier
+                check = f.replace(
+                    "_separate_pca", "_separate_decomp"
+                )  # this is bc I made some bad naming practices earlier
                 # load search
                 if not check.endswith(f"{mode}_search.pkl"):
                     continue
-                search = load(open(os.path.join(model_store, f), 'rb'))
+                search = load(open(os.path.join(model_store, f), "rb"))
 
                 # print model name and evaluate
                 model_name = search.best_estimator_.__class__.__name__
@@ -137,12 +147,15 @@ if __name__ == "__main__":
                 print(results_df)
                 best_mask = results_df["rank_test_balanced_accuracy"] == 1
                 best = results_df[best_mask]
-                of_interest = [col for col in best.columns if (("mean" in col or "std" in col) and "time" not in col)]
+                of_interest = [
+                    col
+                    for col in best.columns
+                    if (("mean" in col or "std" in col) and "time" not in col)
+                ]
                 best = best[of_interest]
                 # best = best.rename(columns=lambda c: re.sub(r"_test_", "_val_", c))
                 best = best.rename(columns=lambda c: re.sub(r"_test_", "_val_", c))
                 print(best.T)
-                
 
                 # calculate testing metrics
                 estimator = search.best_estimator_
@@ -151,23 +164,33 @@ if __name__ == "__main__":
                     y_pred = (y_prob >= 0.5).astype(int)
                 else:
                     y_prob = estimator.decision_function(X)
-                    y_pred = (y_prob >= 0).astype(int)  
+                    y_pred = (y_prob >= 0).astype(int)
 
-                r['test_balanced_accuracy'] = balanced_accuracy_score(y, y_pred)
-                r['test_auc'] = roc_auc_score(y, y_prob)
+                r["test_balanced_accuracy"] = balanced_accuracy_score(y, y_pred)
+                r["test_auc"] = roc_auc_score(y, y_prob)
 
                 r["mode"] = mode
                 r["model"] = model_name
                 r = r | {k: v[0] for k, v in best.to_dict(orient="list").items()}
                 rows.append(r)
 
-
         # concatenate rows in one df
         df = pd.DataFrame(rows).sort_values("mean_val_auc", ascending=False)
-        
+
         # save as csv
-        pd.set_option('display.max_columns', None)
-        pd.set_option('display.float_format', "{:.4f}".format)
+        pd.set_option("display.max_columns", None)
+        pd.set_option("display.float_format", "{:.4f}".format)
         print("\nAll results:")
-        print(df[['model', 'mode','mean_train_auc', 'mean_val_auc', 'test_balanced_accuracy', 'test_auc']])
+        print(
+            df[
+                [
+                    "model",
+                    "mode",
+                    "mean_train_auc",
+                    "mean_val_auc",
+                    "test_balanced_accuracy",
+                    "test_auc",
+                ]
+            ]
+        )
         df.to_csv(os.path.join(model_store, "results.csv"), index=False)
