@@ -24,7 +24,7 @@ from data_utils import build_continuous_time, load_label
 from constants import *
 from process_utils import *
 
-from dask_ml.preprocessing import StandardScaler
+from dask_ml.preprocessing import StandardScaler, RobustScaler
 from dask_ml.decomposition import PCA
 
 from sklearn.preprocessing import PowerTransformer
@@ -33,8 +33,9 @@ from sklearn.preprocessing import PowerTransformer
 def normalize(
     save_dir,
     variables,
-    img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize",
+    img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize_impute_rs",
     graph=False,
+    scaler=None,
 ):
     n_samples = 100_000
     os.makedirs(img_dir, exist_ok=True)
@@ -50,19 +51,26 @@ def normalize(
                 da.ravel(z_arr), size=n_samples, replace=False
             ).compute()
 
-        if v == "spo2":
-            # flip tail, then box cox normalization
-            scaler = PowerTransformer()
-            z_arr = 1.0 - z_arr
-
-            scaled_values = scaler.fit_transform(z_arr.compute())
-            scaled_values = da.from_array(scaled_values).rechunk(
-                {1: scaled_values.shape[1]}
-            )
-        else:
-            # for others, do classic normalization
-            scaler = StandardScaler()
+        if scaler == "robust":
+            if v == "spo2":
+                # flip tail
+                z_arr = 100.0 - z_arr
+            scaler = RobustScaler(quantile_range=(10.0, 90.0))
             scaled_values = scaler.fit_transform(z_arr)
+        else:
+            if v == "spo2":
+                # flip tail, then box cox normalization
+                scaler = PowerTransformer()
+                z_arr = 100.0 - z_arr
+
+                scaled_values = scaler.fit_transform(z_arr.compute())
+                scaled_values = da.from_array(scaled_values).rechunk(
+                    {1: scaled_values.shape[1]}
+                )
+            else:
+                # for others, do classic normalization
+                scaler = StandardScaler()
+                scaled_values = scaler.fit_transform(z_arr)
 
         dump(scaler, open(scaler_store, "wb"))
         da.to_zarr(
@@ -75,44 +83,93 @@ def normalize(
                 da.ravel(scaled_values), size=n_samples, replace=False
             ).compute()
 
-            fig, ax = plt.subplots(figsize=(8, 8))
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+
+            # --- Left plot: Before normalization
             sns.histplot(
                 sampled_data_pre,
-                ax=ax,
+                ax=axes[0],
                 stat="probability",
-                label="Before Norm",
                 edgecolor=(0, 0, 0, 0.5),
                 alpha=0.5,
             )
+            axes[0].set_title("Before Normalization")
+            axes[0].set_xlabel(f"{v}")
+
+            # --- Right plot: After normalization
             sns.histplot(
                 sampled_data_post,
-                ax=ax,
+                ax=axes[1],
                 stat="probability",
-                label="After Norm",
                 edgecolor=(0, 0, 0, 0.5),
                 alpha=0.5,
             )
-            ax.set_xlabel(f"{v}")
-            plt.title(f"Effect of normalization on {v}")
-            ax.legend()
-            img_name = f"{v}_norm_effect.png"
+            axes[1].set_title("After Normalization")
+            axes[1].set_xlabel(f"{v}")
+
+            fig.suptitle(f"Effect of normalization on {v} (Train Set)")
+
+            img_name = f"{v}_norm_effect_train.png"
             plt.savefig(os.path.join(img_dir, img_name))
             plt.close()
 
         # transform test set
         z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
         z_arr_test = da.from_zarr(z_arr_store_test)
-        if v == "spo2":
-            scaled_values = scaler.fit_transform(z_arr_test.compute())
-            scaled_values = da.from_array(scaled_values).rechunk(
-                {1: scaled_values.shape[1]}
-            )
-        else:
+
+        if scaler == "robust":
+            if v == "spo2":
+                z_arr_test = 100.0 - z_arr_test
             z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
             scaled_values = scaler.transform(z_arr_test)
+        else:
+            if v == "spo2":
+                z_arr_test = 100.0 - z_arr_test
+                scaled_values = scaler.transform(z_arr_test.compute())
+                scaled_values = da.from_array(scaled_values).rechunk(
+                    {1: scaled_values.shape[1]}
+                )
+            else:
+                z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
+                scaled_values = scaler.transform(z_arr_test)
         da.to_zarr(
             scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
         )
+
+        # graph effect of norm
+        if graph:
+            sampled_data_post = da.random.choice(
+                da.ravel(scaled_values), size=n_samples, replace=False
+            ).compute()
+
+            fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+            # --- Left plot: Before normalization
+            sns.histplot(
+                sampled_data_pre,
+                ax=axes[0],
+                stat="probability",
+                edgecolor=(0, 0, 0, 0.5),
+                alpha=0.5,
+            )
+            axes[0].set_title("Before Normalization")
+            axes[0].set_xlabel(f"{v}")
+
+            # --- Right plot: After normalization
+            sns.histplot(
+                sampled_data_post,
+                ax=axes[1],
+                stat="probability",
+                edgecolor=(0, 0, 0, 0.5),
+                alpha=0.5,
+            )
+            axes[1].set_title("After Normalization")
+            axes[1].set_xlabel(f"{v}")
+
+            fig.suptitle(f"Effect of normalization on {v} (Test Set)")
+
+            img_name = f"{v}_norm_effect_test.png"
+            plt.savefig(os.path.join(img_dir, img_name))
+            plt.close()
 
         # clean up
         shutil.rmtree(z_arr_store)
@@ -282,7 +339,9 @@ def downsample(variables, save_dir):
 
 
 def do_pca(save_dir, z_arr_train, z_arr_test):
-    n_dim = np.min([z_arr_train.shape[0], z_arr_train.shape[1], 1_000])
+    z_arr_train = z_arr_train.rechunk({1: z_arr_train.shape[1]})
+    z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
+    n_dim = np.min([z_arr_train.shape[0], z_arr_train.shape[1], 5_000])
 
     col_var = z_arr_train.var(axis=0).compute()
     pca = PCA(n_components=n_dim)
@@ -356,14 +415,24 @@ if __name__ == "__main__":
         help="Mode of window extraction.",
         default="mean",
     )
+    parser.add_argument(
+        "-s",
+        "--scaler",
+        choices=["standard", "robust"],
+        help="Scaler to use.",
+        default="standard",
+    )
 
     args = parser.parse_args()
     np.random.seed(420)
+    pd.options.display.float_format = '{:.0f}'.format
     dataset_name = f"w_{args.window_size}s_{'_'.join(args.variables)}"
     if args.match_grid:
         dataset_name = "downsample_" + dataset_name
     if args.mode == "smooth":
         dataset_name = "smooth_" + dataset_name
+    if args.scaler == "robust":
+        dataset_name = "robust_" + dataset_name
 
     print(
         f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
@@ -435,7 +504,7 @@ if __name__ == "__main__":
     # preprocess dataset
     # normalize (imputation already done)
     print("Normalizing:")
-    normalize(save_dir, args.variables)
+    normalize(save_dir, args.variables, scaler = args.scaler)
 
     # generates final base dataset
     print("\nGenerating whole dataset:")
@@ -505,5 +574,5 @@ if __name__ == "__main__":
     groups = labels["ptid"].astype(str)
 
     y_train = y_train.dropna()
-    print(y_train.sum() / y_train.shape[0], "of training windows are inside AR limits when smoothed.")
+    print(f"{y_train.sum() / y_train.shape[0] * 100:0.1f}% of training windows are inside AR limits for mode {args.mode}.")
     

@@ -7,6 +7,106 @@ import pandas as pd
 
 from constants import *
 
+def merge_quality_intervals(valid_df, bad_df):
+    pd.options.display.float_format = '{:.0f}'.format
+    
+    # Ensure segment_id exists (assign if not)
+    if "segment_id" not in valid_df.columns:
+        valid_df = valid_df.copy()
+        valid_df["segment_id"] = range(len(valid_df))
+
+    # Collect events for sweep-line processing
+    events = []
+
+    # Valid segment events
+    for _, r in valid_df.iterrows():
+        events.append((r.starttime,  1,  "valid", r.segment_id, r.frequency))
+        events.append((r.endtime,   -1, "valid", r.segment_id, r.frequency))
+
+    # Bad-quality events
+    for _, r in bad_df.iterrows():
+        events.append((r.starttime,  1,  "bad", None, None))
+        events.append((r.endtime,   -1, "bad", None, None))
+
+    # Sort by time, with end(-1) before start(+1)
+    events = sorted(events, key=lambda x: (x[0], x[1]))
+
+    # Sweep-line state
+    active_segments = {}     # segment_id → frequency
+    bad_active = 0
+    current_start = None
+    current_seg = None
+    current_freq = None
+    pieces = []
+
+    # Sweep
+    for t, delta, kind, seg_id, freq in events:
+
+        # If we were in a "good" region and it's ending
+        if active_segments and bad_active == 0 and current_start is not None:
+            pieces.append({
+                "segment_id": current_seg,
+                "starttime": current_start,
+                "endtime": t,
+                "frequency": current_freq
+            })
+            current_start = None
+
+        # Update state
+        if kind == "valid":
+            if delta == 1:
+                active_segments[seg_id] = freq
+            else:
+                active_segments.pop(seg_id, None)
+        else:  # bad interval
+            bad_active += delta
+
+        # If entering a "good" region
+        if active_segments and bad_active == 0 and current_start is None:
+            # Choose the (only) active segment
+            # If overlapping segments exist, choose the earliest start
+            current_seg = sorted(active_segments.keys())[0]
+            current_freq = active_segments[current_seg]
+            current_start = t
+
+    pieces_df = pd.DataFrame(pieces)
+
+    # If no pieces exist (all bad), return empty
+    if pieces_df.empty:
+        return pieces_df
+
+
+    # Finalize (recompute length + startidx)
+    final = finalize_segments(pieces_df, valid_df)
+
+    return final
+
+
+def finalize_segments(df, valid_df):
+    """Recalculate length (sample count) and startidx per segment."""
+    out = df.copy()
+
+    # Pull original segment metadata
+    seg_info = valid_df.set_index("segment_id")[["starttime", "startidx", "frequency"]]
+
+    # Length = number of samples
+    duration = (out["endtime"] - out["starttime"]) / 1e6
+    out["length"] = (duration * out["frequency"]).round().astype(int)
+
+    # Compute true startidx based on original raw data index
+    def compute_true_startidx(row):
+        seg = row.segment_id
+        orig = seg_info.loc[seg]
+        # Offset in seconds
+        dt = (row.starttime - orig.starttime) / 1e6
+        # Convert to samples
+        sample_offset = np.floor((dt * orig.frequency)).astype(int)
+        return orig.startidx + sample_offset
+
+    out["startidx"] = out.apply(compute_true_startidx, axis=1)
+
+    return out.reset_index(drop=True)
+
 
 def get_window_index(mode, window_seconds=WINDOW_SECONDS):
     # according to mode, get index of time t of labels for the specific duration of the window
@@ -57,14 +157,12 @@ def extract_proportions_smooth(windows, labels, percentage, ref):
 
         mean_arr = np.nanmean(split_window, axis=1)
 
-        # find fraction of time within limits
+        # find fraction of time outside limits
         out = ((mean_arr < lower_limits.values) | (mean_arr > upper_limits.values))
         frac_out = out.mean()
 
-        # set according to percentage
-        if frac_out >= SMOOTH_FRAC:
-            print(np.concatenate((mean_arr[:, None], lower_limits.values[:, None], upper_limits.values[:, None]), axis=1))
-        in_out[i] = frac_out < SMOOTH_FRAC
+        # set true if outside <= 20% of the time
+        in_out[i] = frac_out <= SMOOTH_FRAC_OUT_MIN
 
     return in_out
 
@@ -273,6 +371,24 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         ts_index["endtime"] = ts_index["starttime"] + (
             ts_index["length"] / ts_index["frequency"] * 1e6
         ).astype(np.int64)
+
+        # add segments with non-zero quality to index to filter bad quality out
+        quality = pd.DataFrame(f[f"{ptid}/raw/{v_long}"].attrs["quality"]) # df with columns: time, quality code
+        assert quality["value"].isna().sum() == 0, "Unexpected: quality value contains nas"
+        # shift to get end time of quality segments
+        quality['endtime'] = quality['time'].shift(-1, fill_value = ts_index['endtime'].max())
+        quality.rename(columns={'time': 'starttime'}, inplace=True)
+        
+        # find segments with non-zero quality
+        problem_segments = quality[quality["value"] != 0]
+
+        # merge
+        ts_index = merge_quality_intervals(ts_index, problem_segments.copy())
+        
+        if np.any(ts_index.endtime > ts_index.starttime.shift(-1, fill_value = ts_index.endtime.max())):
+            print("Warning: overlapping segments detected after quality merging.")
+            print(pd.concat([ts_index.endtime, ts_index.starttime.shift(-1, fill_value = ts_index.endtime.max())], axis=1))
+            print(v, ptid)
 
         # select label timepoints in segments
         seg_start = ts_index["starttime"].to_numpy()[:, None]
