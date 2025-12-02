@@ -27,7 +27,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import RandomizedSearchCV, RepeatedStratifiedKFold
 from sklearn.metrics import balanced_accuracy_score, auc
 
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from dask_ml.model_selection import HyperbandSearchCV
@@ -35,6 +35,9 @@ from dask_ml.model_selection import HyperbandSearchCV
 from ray import tune
 
 import xgboost as xgb
+
+from aeon.classification.convolution_based import MultiRocketClassifier
+from aeon.classification.distance_based import KNeighborsTimeSeriesClassifier
 
 from data_utils import build_continuous_time, load_label
 from constants import *
@@ -54,7 +57,7 @@ if __name__ == "__main__":
         "-m",
         type=str,
         help="Type of model to train",
-        choices=["log_reg", "svm", "knn", "rand_forest", "decision_tree", "xgb"],
+        choices=["log_reg", "svm", "knn", "rand_forest", "decision_tree", "xgb", "rocket", "knn_multivar"],
         required=True,
     )
     parser.add_argument(
@@ -126,6 +129,7 @@ if __name__ == "__main__":
 
     # init model
     n_iter = 30
+    multivar = False
     if args.model == "log_reg":
         model = LogisticRegression(n_jobs=1, solver='saga', max_iter=10_000)
         params = {
@@ -178,20 +182,31 @@ if __name__ == "__main__":
             'reg_lambda': tune.loguniform(1e-5, 20.0),
         }
         n_iter = (len(list(params.keys())) - 2) * 10
+    elif args.model == "rocket":
+        multivar = True
+        params = {
+            "n_kernels": tune.choice([5_000, 10_000, 15_000]),
+            "max_dilations_per_kernel": tune.choice([32, 64]),
+            "n_features_per_kernel": tune.qrandint(4, 16, 2),
+            "estimator__alpha": tune.loguniform(1e-3, 1e3),   # Ridge reg
+            'class_weight': tune.choice([None, 'balanced']),
+        }
+        model = MultiRocketClassifier(estimator=RidgeClassifier())
+    elif args.model == "knn_multivar":
+        multivar = True
+        params = {
+            "n_neighbors": tune.lograndint(5, 1_000),
+            "distance": tune.choice(["euclidean", "msm", "erp"]),
+            "weights": tune.choice(["uniform", "distance"]),
+        }
+        model = KNeighborsTimeSeriesClassifier()
+    elif args.model == "rocket_xgb":
+        multivar = True
+        # needs params
+        # needs model
 
 
     cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3) # repeats five folds 2 times
-    # search = RandomizedSearchCV(
-    #     model,
-    #     params,
-    #     scoring=metrics,
-    #     n_iter=n_iter,
-    #     refit='auc',
-    #     n_jobs=-1 if args.model != "xgb" else 1,
-    #     verbose=3,
-    #     cv=cv,
-    #     return_train_score=True,
-    # )
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
@@ -200,8 +215,32 @@ if __name__ == "__main__":
         rank_metric='mean_val_auc',
         cv=[5, 3],
         store_path=model_store,
+        model_name=f"{args.model}_{args.data_mode}",
     )
     X_train = X_train.compute()
+
+    if multivar and "downsample" in args.train_dir:
+        train_dir_name = os.path.basename(args.train_dir.rstrip("/"))
+        train_params = train_dir_name.split("_")
+
+        seconds = None
+        channels = []
+        for token in train_params:
+            if token.endswith("s") and token[:-1].isdigit():
+                seconds = int(token[:-1])
+            elif seconds is not None:
+                channels.append(token)
+
+        num_channels = len(channels)
+        print("Detected channels:", channels)
+        print("num_channels =", num_channels)
+
+        timesteps = X_train.shape[1] // num_channels
+
+        # Reshape to AEON format: (N, num_channels, timesteps)
+        X_train = X_train.reshape(X_train.shape[0], num_channels, timesteps)
+        print(f"Reshaped training set to {X_train.shape}")
+    assert not (multivar and "downsample" not in args.train_dir), "Cannot train multivariable model on not downsampled data."
 
     # train
     search = search.fit(X_train, y_train, groups=groups)
@@ -216,5 +255,5 @@ if __name__ == "__main__":
     df = pd.DataFrame(search.cv_results_())
     print(df)
 
-    # all I need to save are the results now
-    df.to_csv(os.path.join(model_store, f"{args.model}_{args.data_mode}_cv_results.csv"), index=False)
+
+    # results will be saved in ray tuner logs
