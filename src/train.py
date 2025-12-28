@@ -172,27 +172,28 @@ if __name__ == "__main__":
     elif args.model == "rand_forest":
         model = RandomForestClassifier()
         params = {
-            "n_estimators": tune.lograndint(50, 0.05 * X_train.shape[0]),
-            "max_depth": tune.qrandint(5, 50, 5),
-            "max_features": tune.choice([0.02, 0.05, 0.1, "sqrt"]),
-            "min_samples_split": tune.randint(2, 25),
-            "min_samples_leaf": tune.randint(1, 15),
-            "class_weight": tune.choice([None, "balanced"]),
+            "n_estimators": tune.lograndint(50, 0.005 * X_train.shape[0]),
+            "max_depth": tune.qrandint(5, 30, 5),
+            "max_features": tune.choice([0.005, 0.02, 0.05, "sqrt"]),
+            "min_samples_split": tune.randint(15, 100),
+            "min_samples_leaf": tune.randint(10, 50),
+            "class_weight": "balanced",
         }
         n_iter = (len(list(params.keys())) - 1) * 10
     elif args.model == "xgb":
         model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
         params = {
-            "n_estimators": tune.lograndint(50, 0.05 * X_train.shape[0]),
+            "n_estimators": tune.lograndint(50, 0.005 * X_train.shape[0]),
             "max_depth": tune.randint(2, 10),
-            "learning_rate": tune.loguniform(1e-5, 1e-1),
-            "subsample": tune.quniform(0.25, 0.75, 0.05),
+            "learning_rate": tune.loguniform(1e-3, 1e-1),
+            "subsample": tune.quniform(0.5, 0.9, 0.05),
             "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
-            "gamma": tune.quniform(0, 5, 0.25),
-            "reg_alpha": tune.loguniform(1e-3, 20.0),
-            "reg_lambda": tune.loguniform(1e-3, 20.0),
+            "gamma": tune.quniform(0.5, 10, 0.25),
+            "reg_alpha": tune.loguniform(1e-1, 50.0),
+            "reg_lambda": tune.loguniform(1.0, 100.0),
+            'min_child_weight': tune.loguniform(1.0, 50.0)
         }
-        n_iter = (len(list(params.keys())) - 2) * 10
+        n_iter = (len(list(params.keys())) - 1) * 10
     elif args.model == "rocket":
         multivar = True
         params = {
