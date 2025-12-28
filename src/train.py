@@ -229,21 +229,24 @@ if __name__ == "__main__":
     )
     X_train = X_train.compute()
 
+    # stats for downsampling
+    train_dir_name = os.path.basename(args.train_dir.rstrip("/"))
+    train_params = train_dir_name.split("_")
+
+    seconds = None
+    channels = []
+    for token in train_params:
+        if token.endswith("s") and token[:-1].isdigit():
+            seconds = int(token[:-1])
+        elif seconds is not None:
+            channels.append(token)
+
+    num_channels = len(channels)
+    print("Detected channels:", channels)
+    print("num_channels =", num_channels)
+    
+    # prep data for multivar models
     if multivar and "downsample" in args.train_dir:
-        train_dir_name = os.path.basename(args.train_dir.rstrip("/"))
-        train_params = train_dir_name.split("_")
-
-        seconds = None
-        channels = []
-        for token in train_params:
-            if token.endswith("s") and token[:-1].isdigit():
-                seconds = int(token[:-1])
-            elif seconds is not None:
-                channels.append(token)
-
-        num_channels = len(channels)
-        print("Detected channels:", channels)
-        print("num_channels =", num_channels)
 
         timesteps = X_train.shape[1] // num_channels
 
