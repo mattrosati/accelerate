@@ -8,13 +8,17 @@ import pandas as pd
 from constants import *
 
 
-def merge_quality_intervals(valid_df, bad_df):
-    pd.options.display.float_format = "{:.0f}".format
+def robust_floor(x, tol=1e-5):
+    return np.floor(x + tol)
 
-    # Ensure segment_id exists (assign if not)
-    if "segment_id" not in valid_df.columns:
-        valid_df = valid_df.copy()
-        valid_df["segment_id"] = range(len(valid_df))
+def robust_ceil(x, tol=1e-5):
+    return np.ceil(x - tol)
+
+def merge_quality_intervals(valid_df, bad_df):
+
+    bad_df = bad_df.copy()
+    valid_df = valid_df.copy()
+    valid_df["segment_id"] = range(len(valid_df))
 
     # Collect events for sweep-line processing
     events = []
@@ -93,7 +97,7 @@ def finalize_segments(df, valid_df):
 
     # Length = number of samples
     duration = (out["endtime"] - out["starttime"]) / 1e6
-    out["length"] = (duration * out["frequency"]).round().astype(int)
+    out["length"] = robust_ceil((duration * out["frequency"])).astype(np.uint64)
 
     # Compute true startidx based on original raw data index
     def compute_true_startidx(row):
@@ -102,12 +106,13 @@ def finalize_segments(df, valid_df):
         # Offset in seconds
         dt = (row.starttime - orig.starttime) / 1e6
         # Convert to samples
-        sample_offset = np.floor((dt * orig.frequency)).astype(int)
+        sample_offset = robust_ceil((dt * orig.frequency)).astype(np.uint64)
         return orig.startidx + sample_offset
 
     out["startidx"] = out.apply(compute_true_startidx, axis=1)
+    out.drop(columns="segment_id", inplace=True)
 
-    return out.reset_index(drop=True)
+    return out
 
 
 def get_window_index(mode, window_seconds=WINDOW_SECONDS):
@@ -135,13 +140,17 @@ def extract_proportions(windows, labels, percentage=0.5, strategy="count", ref=N
 
 
 def extract_proportions_smooth(windows, labels, percentage, ref):
-    in_out = np.empty(shape=len(windows), dtype=bool)
+    in_out = np.empty(shape=len(windows))
     for i, w in enumerate(windows):
         start = labels["start_idx"].iloc[ref[i]]
         end = labels["end_idx"].iloc[ref[i]]
         lower_limits = labels["LLA_Yale_affected_beta"].loc[start:end]
         upper_limits = labels["ULA_Yale_affected_beta"].loc[start:end]
 
+        # if there's missing data in the LA calculation, label is na
+        if lower_limits.isna().any() or upper_limits.isna().any():
+            in_out[i] = np.nan
+            continue
         w_vector = w["w"]
 
         if w["total_length"].sum() == 0:
@@ -149,6 +158,12 @@ def extract_proportions_smooth(windows, labels, percentage, ref):
 
         # split in minute by minute
         intervals = len(lower_limits)
+        if len(w_vector) % intervals != 0:
+            print(ref[i])
+            print(start, end)
+            print(w_vector.shape)
+            print(lower_limits)
+            # print(upper_limits)
         split_window = w_vector.reshape((intervals, -1), order="C")
 
         # find average of window
@@ -165,6 +180,9 @@ def extract_proportions_smooth(windows, labels, percentage, ref):
 
         # set true if outside <= 20% of the time
         in_out[i] = frac_out <= SMOOTH_FRAC_OUT_MIN
+        # label as “outside AR” if >46% of time outside AR: which means that "inside AR" if >=54% of time inside
+        # in_out[i] = frac_out <= 0.46
+
 
     return in_out
 
@@ -174,6 +192,10 @@ def extract_proportions_mean(windows, labels):
     for i, w in enumerate(windows):
         lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
         upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
+
+        if pd.isna(lower_limit) or pd.isna(upper_limit):
+            in_out[i] = np.nan
+            continue
 
         w_vector = w["w"]
         if w["total_length"].sum() == 0:
@@ -250,26 +272,25 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()
     seg_end = index["endtime"].iloc[coords["segment"]].to_numpy()
     seg_freq = index["frequency"].iloc[coords["segment"]].to_numpy()
-    tokens_from_seg_start = (
-        ((coords["DateTime"].to_numpy() - seg_start) / (1e6 * (1 / seg_freq)))
-        .round()
-        .astype(np.int64)
-    )
-    closest_idx = (
-        index["startidx"].iloc[coords["segment"]].to_numpy() + tokens_from_seg_start
-    )
+    # tokens_from_seg_start = (
+    #     robust_ceil(((coords["DateTime"].to_numpy() - seg_start) * seg_freq) / 1e6 )
+    #     .astype(np.int64)
+    # )
+    # closest_idx = (
+    #     index["startidx"].iloc[coords["segment"]].to_numpy() + (tokens_from_seg_start - 1)
+    # )
     assert seg_start.shape == coords["segment"].shape
 
     # get position of window bounds in absolute time to check if outside segments
     window_us = window_s * 1e6
     window_index_us = (
-        window_index
-    ) * 1e6  # I don't think I need a plus one here, if I am indexing 4 seconds of data, i want the 3 index or the last number at ms 3e3
-    window_start = coords["DateTime"].to_numpy() - float(window_index_us)
+        window_index + 1
+    ) * 1e6  # I want to look back at least index + 1 tokens to set it as start of the time of the window and then pull only the data within there.
+    window_start = coords["DateTime"].to_numpy() - window_index_us
     window_end = window_start + window_us
     window_length = window_end - window_start
     total_window_token_length = (
-        (window_length / (1e6 * (1 / seg_freq))).round().astype(np.int64)
+        ((window_length * seg_freq) / 1e6 ).round().astype(np.uint64)
     )
 
     # check whether overlapping with gap
@@ -302,14 +323,12 @@ def get_window(data, index, coords, window_index, window_s, percentage=0.5):
     window_start_clipped = np.maximum(seg_start, window_start)
     window_end_clipped = np.minimum(seg_end, window_end)
     window_start_tokens = (
-        ((window_start_clipped - seg_start) / (1e6 * (1 / seg_freq)))
-        .round()
-        .astype(np.int64)
+        (robust_floor(((window_start_clipped - seg_start) * seg_freq) / 1e6))
+        .astype(np.uint64)
     )
     window_end_tokens = (
-        ((window_end_clipped - seg_start) / (1e6 * (1 / seg_freq)))
-        .round()
-        .astype(np.int64)
+        (robust_floor(((window_end_clipped - seg_start) * seg_freq) / 1e6))
+        .astype(np.uint64)
     )
 
     w_start_idx = (
@@ -354,10 +373,14 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         ts = f[f"{ptid}/raw/{v_long}"][...]
         ts_index = pd.DataFrame(f[f"{ptid}/raw/{v_long}"].attrs["index"])
 
-        # replace invalid vals and filter out
+        # replace invalid vals, do not filter out
         invalid_val = f.attrs["invalid_val"]
         labels.replace(invalid_val, np.nan, inplace=True)
-        labels.dropna(inplace=True)
+        # labels.dropna(inplace=True)
+
+        #make everything uint64
+        labels.DateTime = labels.DateTime.astype(np.uint64)
+        ts_index = ts_index.astype(np.uint64)
 
         # replace with nan if value is 0 or less (incompatible with life)
         # replace invalid values with nan
@@ -371,8 +394,8 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
 
         # convert index to segments start and end times
         ts_index["endtime"] = ts_index["starttime"] + (
-            ts_index["length"] / ts_index["frequency"] * 1e6
-        ).astype(np.int64)
+            ((ts_index["length"] - 1) / ts_index["frequency"]) * 1e6
+        ).astype(np.uint64)
 
         # add segments with non-zero quality to index to filter bad quality out
         quality = pd.DataFrame(
@@ -391,7 +414,9 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         problem_segments = quality[quality["value"] != 0]
 
         # merge
-        ts_index = merge_quality_intervals(ts_index, problem_segments.copy())
+        ts_index_orig = ts_index.copy()
+        ts_index = merge_quality_intervals(ts_index, problem_segments)
+        ts_index = ts_index.astype(np.uint64)
 
         if np.any(
             ts_index.endtime
@@ -437,6 +462,9 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                     if labels["start_idx"].iloc[i] in labels.index:
                         d = np.append(d, i)
                         df2.append([d])
+                if len(df2) == 0:
+                    print(f"no windows for ptid {ptid}")
+                    return None, None
                 df = np.concatenate(df2, axis=0)
 
             # in_out computation should not be based on imputed values
@@ -447,7 +475,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                 ]
                 ref = None
                 if strategy == "smooth":
-                    ref = list([int(v[4]) for v in df])
+                    ref = df[:, 4].tolist()
                 in_out = extract_proportions(
                     windows, labels, percentage=percentage, strategy=strategy, ref=ref
                 )
@@ -492,17 +520,19 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                 df["datetime"] = np.array(labels["DateTime"])
                 df["in?"] = in_out
                 df["ptid"] = ptid
+                df["invalid"] = df["in?"].isna()
+
 
                 if len(in_out) == 0:
                     print("No valid windows extracted for patient:", ptid)
                 return df, windows_filtered
             else:
-                return (
+                df = (
                     pd.DataFrame(labels["DateTime"])
+                    .rename(columns={"DateTime": "datetime"})
                     .reset_index(drop=True)
-                    .rename(columns={"DateTime": "datetime"}),
-                    windows_filtered,
-                )  # only compute in_out for abp
+                )
+                return df, windows_filtered  # only compute in_out for abp
 
         else:
             return None, None

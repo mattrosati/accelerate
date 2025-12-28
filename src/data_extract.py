@@ -201,13 +201,14 @@ def intersection_windows(variables, split_dict, temp_dir):
                 labels = pd.read_pickle(os.path.join(temp_dir, v, p, "labels.pkl"))
                 labels = labels.reset_index()
                 labels = labels.rename(columns={"index": f"{v}_index"})
+                # labels = labels.drop(columns="invalid")
                 if i == 0:
                     combined = labels
                 else:
                     combined = combined.merge(labels, how="inner", on="datetime")
-
-                # save combined
-                combined.to_pickle(os.path.join(temp_dir, f"{p}_combined_labels.pkl"))
+            
+            # save combined
+            combined.to_pickle(os.path.join(temp_dir, f"{p}_combined_labels.pkl"))
 
     return None
 
@@ -249,7 +250,9 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
         return ptid
 
     w_vectors = np.stack([k["w"] for k in windows], axis=0)
+    
 
+    assert w_vectors.shape[0] == in_out.shape[0]
     # save to a temp file as a zarr array
     temp_dir_path = os.path.join(temp_dir_path, ptid)
     os.makedirs(temp_dir_path, exist_ok=True)
@@ -288,6 +291,9 @@ def finalize(variables, split_dict, save_dir):
 
                 labels_df = pd.read_pickle(labels_pt_store)
 
+                # filter invalids out of label
+                labels_df = labels_df[~labels_df.invalid].copy()
+
                 # grab and filter
                 z_arr = da.from_zarr(zarr_pt_store)
                 z_arr = z_arr[labels_df[f"{v}_index"], :]
@@ -297,7 +303,7 @@ def finalize(variables, split_dict, save_dir):
                 else:
                     base = da.concatenate([base, z_arr], axis=0)
                     combo_label = pd.concat(
-                        [combo_label, pd.read_pickle(labels_pt_store)],
+                        [combo_label, labels_df],
                         axis=0,
                     ).reset_index(drop=True)
 
@@ -308,7 +314,7 @@ def finalize(variables, split_dict, save_dir):
     return None
 
 
-def downsample(variables, save_dir):
+def downsample(variables, save_dir, strategy="mean", frequency=60):
     print("Downsampling:")
     for s in ["train", "test"]:
         # find minimum frequency
@@ -322,25 +328,45 @@ def downsample(variables, save_dir):
                 min_points = z_arr.shape[1]
 
         # downsample based on minimum frequency
-        for v in tqdm(variables):
+        for v in variables:
             zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
             z_arr = da.from_zarr(zarr_all_store)
-            if z_arr.shape[1] == min_points:
-                continue
-            else:
+            print(f"Downsampling variable {v} in split {s}, shape is {z_arr.shape}.")
+            if z_arr.shape[1] != min_points:
                 time_grid_mult = z_arr.shape[1] // min_points
-                downsampled = da.reshape(
-                    z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
-                ).mean(axis=-1)
-                print(f"Downsampled {v} from {z_arr.shape} to {downsampled.shape}")
-                da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))
-                shutil.rmtree(zarr_all_store)
-                shutil.move(os.path.join(save_dir, s, f"{v}_x_ds.zarr"), zarr_all_store)
+                if strategy == "mean":
+                    downsampled = da.reshape(
+                        z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
+                    ).mean(axis=-1)
+                elif strategy == "median":
+                    downsampled = da.median(da.reshape(
+                        z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
+                    ), axis=-1)
+                print(f"Downsampled to {downsampled.shape}")
+            else:
+                downsampled = z_arr
+
+            # downsample even further if desired
+            if frequency < 60:
+                points_per_freq = 60 // frequency
+                # Reshape to (N, timesteps, points_per_freq)
+                downsampled = da.reshape(downsampled, shape=(downsampled.shape[0], -1, points_per_freq))
+
+                if strategy == "mean":
+                    downsampled = downsampled.mean(axis=-1)
+                elif strategy == "median":
+                    downsampled = da.median(downsampled, axis=-1)
+
+                print(f"Further downsampled to {downsampled.shape}")
+            da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))
+            shutil.rmtree(zarr_all_store)
+            shutil.move(os.path.join(save_dir, s, f"{v}_x_ds.zarr"), zarr_all_store)
+
 
     return None
 
 
-def do_pca(save_dir, z_arr_train, z_arr_test):
+def do_pca(save_dir, z_arr_train, z_arr_test, variance=0.95):
     z_arr_train = z_arr_train.rechunk({1: z_arr_train.shape[1]})
     z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
     n_dim = np.min([z_arr_train.shape[0], z_arr_train.shape[1], 5_000])
@@ -350,9 +376,9 @@ def do_pca(save_dir, z_arr_train, z_arr_test):
     pca = pca.fit(z_arr_train)
     print("- Max var in PCA:", pca.explained_variance_ratio_.cumsum()[-1])
     selected_dim = (
-        np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > 0.95][0] + 1
+        np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > variance][0] + 1
     )
-    print(f"- Using {selected_dim} dimensions at threshold variance of 0.95.")
+    print(f"- Using {selected_dim} dimensions at threshold variance of {variance*100:0.0f}%.")
     X_train = pca.transform(z_arr_train)[:, :selected_dim]
     X_test = pca.transform(z_arr_test)[:, :selected_dim]
     return X_train, X_test
@@ -394,8 +420,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "-g",
         "--match_grid",
-        help="Will mean-downsample all variables to match the sampling grid of the lowest frequency variable.",
-        action="store_true",
+        type=int,
+        default=0,
+        help="Will downsample all variables to match the sampling grid of the lowest frequency variable. 0: none, 1: downsample with mean, 2: downsample with median.",
     )
     parser.add_argument(
         "-o",
@@ -425,17 +452,38 @@ if __name__ == "__main__":
         help="Scaler to use.",
         default="standard",
     )
+    parser.add_argument(
+        "-x",
+        "--variance",
+        type=int,
+        help="Percentage variance to get pcas for.",
+        default=95,
+    )
+    parser.add_argument(
+        "--frequency",
+        "-f",
+        type=int,
+        default=60,
+        help="Number of datapoints per minute, works only after dataset is downsampled to 1 Hz and frequency is factor of 60.",
+    )
 
     args = parser.parse_args()
     np.random.seed(420)
-    pd.options.display.float_format = "{:.0f}".format
+    pd.options.display.float_format = "{:.2f}".format
+
+    assert 60 % args.frequency == 0, "Frequency needs to be a factor of 60."
+
     dataset_name = f"w_{args.window_size}s_{'_'.join(args.variables)}"
-    if args.match_grid:
-        dataset_name = "downsample_" + dataset_name
+    if args.match_grid != 0:
+        dataset_name = f"downsample{args.match_grid}_" + dataset_name
     if args.mode == "smooth":
         dataset_name = "smooth_" + dataset_name
     if args.scaler == "robust":
         dataset_name = "robust_" + dataset_name
+    if args.variance != 95:
+        dataset_name = f"var{args.variance}_" + dataset_name
+    if args.frequency < 60:
+        dataset_name = f"freq{args.frequency}_" + dataset_name
 
     print(
         f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
@@ -460,7 +508,9 @@ if __name__ == "__main__":
     with h5py.File(args.data_file, "r") as f:
         ptids = f["healthy_ptids"][:].astype(str).tolist()
         # for debugging
-        ptids = ptids
+        rng = np.random.default_rng(2323)
+        idx = rng.choice(len(ptids), size=20, replace=False).tolist()
+        ptids = [ptids[i] for i in idx] if args.debug else ptids
         for p in ptids:
             if f[p].attrs["split"] == "train":
                 split_dict["train"].append(p)
@@ -479,7 +529,7 @@ if __name__ == "__main__":
             window_size=args.window_size,
             mode=args.mode,
         )
-        results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
+        results = process_map(func, ptids, max_workers=1 if args.debug else os.cpu_count(), chunksize=1)
 
         # remove invalid patients from split dict
         broken_pts = [r for r in results if r is not None]
@@ -495,8 +545,10 @@ if __name__ == "__main__":
     finalize(args.variables, split_dict, save_dir)
 
     # downsample if we want to match the time grid
-    if args.match_grid:
-        downsample(args.variables, save_dir)
+    if args.match_grid == 1:
+        downsample(args.variables, save_dir, strategy="mean", frequency=args.frequency)
+    elif args.match_grid == 2:
+        downsample(args.variables, save_dir, strategy="median", frequency=args.frequency)
 
     # delete temp_dir
     if not args.debug:
@@ -531,7 +583,7 @@ if __name__ == "__main__":
             )
 
             print(f"Doing PCA for var {v}:")
-            X_train, X_test = do_pca(save_dir, z_arr_train, z_arr_test)
+            X_train, X_test = do_pca(save_dir, z_arr_train, z_arr_test, variance=args.variance/100)
 
             da.to_zarr(
                 X_train,
@@ -562,7 +614,7 @@ if __name__ == "__main__":
 
     if "pca" in args.transforms:
         print("Doing global PCA")
-        X_train, X_test = do_pca(save_dir, base_arr_train, base_arr_test)
+        X_train, X_test = do_pca(save_dir, base_arr_train, base_arr_test, variance=args.variance/100)
         print(
             f"Train and test datasets generated adequately with combined PCAs. {X_train.shape[0]} windows in train and {X_test.shape[0]} in test with {X_train.shape[1]} dimensions."
         )
@@ -596,6 +648,7 @@ if __name__ == "__main__":
     labels = pd.read_pickle(
         os.path.join(args.save_dir, dataset_name, "permanent", "train", "labels.pkl")
     )
+    assert X_train.shape[0] == labels.shape[0]
     y_train = labels["in?"].astype(int)
     groups = labels["ptid"].astype(str)
 
