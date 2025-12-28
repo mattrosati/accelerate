@@ -13,3 +13,5 @@
 -d --model xgb --data_mode separate_pca
 -d --model xgb --data_mode pca
 -d --model xgb --data_mode raw
+-d --model rocket --data_mode raw
+-d --model knn_multivar --data_mode raw

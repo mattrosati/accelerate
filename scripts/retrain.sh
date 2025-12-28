@@ -18,8 +18,8 @@ fi
 
 SLURM_SCRIPTS=(
     "scripts/train_all.sh"
-    "scripts/bigmem_train_all.sh"
-    "scripts/long_train_all.sh"
+    # "scripts/bigmem_train_all.sh"
+    # "scripts/long_train_all.sh"
 )
 
 LOGROOT="logs"

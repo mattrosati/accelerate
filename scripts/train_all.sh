@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --array=0-17                      # Update this range to match the number of runs
+#SBATCH --array=15-17                      # Update this range to match the number of runs
 #SBATCH --partition=day
 #SBATCH --requeue
 #SBATCH --nodes=1
