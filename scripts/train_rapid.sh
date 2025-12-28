@@ -3,8 +3,8 @@
 #SBATCH --partition=day
 #SBATCH --requeue
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=10G
-#SBATCH --cpus-per-task=20
+#SBATCH --mem-per-cpu=20G
+#SBATCH --cpus-per-task=40
 #SBATCH --time=1-00:00:00
 
 date;hostname;pwd

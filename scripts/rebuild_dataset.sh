@@ -27,10 +27,12 @@ cd /home/mr2238/accelerate
 #     -m "mean"
 
 # python src/train_test_split.py
+set -x
 
-python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth -f 10 -r 0.5
-python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth -f 1 -r 0.5
-python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth -v rso2r rso2l abp -r 0.5
-python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth -f 10 -v rso2r rso2l abp -r 0.5
-python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth -f 1 -v rso2r rso2l abp -r 0.5
+python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth -v rso2r rso2l abp
+python -u src/data_extract.py -g 2 -o -t separate_pca pca -w 1200 -s robust -m smooth
+
+python -u src/data_extract.py -g 1 -o -t separate_pca pca -w 1200 -s robust -m smooth -v rso2r rso2l abp
+python -u src/data_extract.py -g 1 -o -t separate_pca pca -w 1200 -s robust -m smooth
+
 
