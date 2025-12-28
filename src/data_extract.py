@@ -3,6 +3,7 @@ import sys
 import shutil
 from argparse import ArgumentParser
 from pickle import dump
+import random
 
 import h5py
 
@@ -213,7 +214,7 @@ def intersection_windows(variables, split_dict, temp_dir):
     return None
 
 
-def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
+def extract_data(ptid, v, temp_dir_path, config):
     """
     Extract data for a given patient ID and variable from the HDF5 file,
     process it into windows, and save the results to a temporary directory.
@@ -221,27 +222,33 @@ def extract_data(ptid, v, file_path, temp_dir_path, window_size, mode="mean"):
     Args:
         ptids (str): Patient ID.
         v (str): Variable to extract.
-        file_path (str): Path to the HDF5 file.
+
         temp_dir_path (str): Path to the temporary directory for saving results.
-        window_size (int): Size of the window in seconds.
-        mode (str): Mode for window extraction ('before', 'after', 'within', 'mean').
+        config: Contains at least the following
+            file_path (str): Path to the HDF5 file.
+            window_size (int): Size of the window in seconds.
+            mode (str): Mode for window extraction ('before', 'after', 'within', 'mean').
     Returns:
         None
     """
+    file_path = config.data_file
+    window_size = config.window_size
+    mode = config.mode
+
     window_index, window_s = (
         get_window_index(mode, window_seconds=window_size),
         window_size,
     )
     if mode in ["mean", "smooth"]:
-        strategy = mode
-        percentage = 0.0
+        config.strategy = mode
+        config.percentage = 0.0
     else:
-        strategy = "count"
-        percentage = PERCENT_IN_MIN
+        config.strategy = "count"
+        config.percentage = PERCENT_IN_MIN
 
     # extract windows for this patient and variable
     in_out, windows = get_windows_var(
-        v, ptid, file_path, window_index, window_s, strategy, percentage
+        v, ptid, window_index, window_s, config,
     )
 
     broken_bool = in_out is None or len(in_out) == 0
@@ -466,9 +473,25 @@ if __name__ == "__main__":
         default=60,
         help="Number of datapoints per minute, works only after dataset is downsampled to 1 Hz and frequency is factor of 60.",
     )
+    parser.add_argument(
+        "--smooth_frac",
+        "-sf",
+        type = float,
+        default=SMOOTH_FRAC_OUT_MIN,
+        help="Minimum fraction of labels to be out to label window as out if smoothing."
+    )
+    parser.add_argument(
+        "--r2_threshold",
+        "-r",
+        type = float,
+        default=-1e2,
+        help="Minimum R2 value for labels to be considered good."
+    )
 
     args = parser.parse_args()
+    config = args
     np.random.seed(420)
+    random.seed(420)
     pd.options.display.float_format = "{:.2f}".format
 
     assert 60 % args.frequency == 0, "Frequency needs to be a factor of 60."
@@ -477,13 +500,15 @@ if __name__ == "__main__":
     if args.match_grid != 0:
         dataset_name = f"downsample{args.match_grid}_" + dataset_name
     if args.mode == "smooth":
-        dataset_name = "smooth_" + dataset_name
+        dataset_name = f"smooth{args.smooth_frac}_" + dataset_name
     if args.scaler == "robust":
         dataset_name = "robust_" + dataset_name
     if args.variance != 95:
         dataset_name = f"var{args.variance}_" + dataset_name
     if args.frequency < 60:
         dataset_name = f"freq{args.frequency}_" + dataset_name
+    if args.r2_threshold > 0.0:
+        dataset_name = f"{args.r2_threshold}r2_" + dataset_name
 
     print(
         f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
@@ -524,10 +549,8 @@ if __name__ == "__main__":
         func = partial(
             extract_data,
             v=var,
-            file_path=args.data_file,
             temp_dir_path=os.path.join(temp_dir, var),
-            window_size=args.window_size,
-            mode=args.mode,
+            config=config,
         )
         results = process_map(func, ptids, max_workers=1 if args.debug else os.cpu_count(), chunksize=1)
 
@@ -656,3 +679,6 @@ if __name__ == "__main__":
     print(
         f"{y_train.sum() / y_train.shape[0] * 100:0.1f}% of training windows are inside AR limits for mode {args.mode}."
     )
+    print("Dataset creation complete.")
+    print(f"Random seed {np.random.default_rng().integers(0, 1e6)}")
+    print("")

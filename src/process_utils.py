@@ -7,7 +7,8 @@ import pandas as pd
 
 from constants import *
 
-
+from dataclasses import dataclass
+    
 def robust_floor(x, tol=1e-5):
     return np.floor(x + tol)
 
@@ -130,22 +131,31 @@ def get_window_index(mode, window_seconds=WINDOW_SECONDS):
             return window_seconds - 1
 
 
-def extract_proportions(windows, labels, percentage=0.5, strategy="count", ref=None):
+def extract_proportions(windows, labels, config, ref=None):
+    percentage = config.percentage
+    strategy = config.strategy
     if strategy == "count":
         return extract_proportions_count(windows, labels, percentage)
     elif strategy == "mean":
         return extract_proportions_mean(windows, labels)
     elif strategy == "smooth":
-        return extract_proportions_smooth(windows, labels, percentage, ref)
+        return extract_proportions_smooth(windows, labels, percentage, ref, config)
 
 
-def extract_proportions_smooth(windows, labels, percentage, ref):
+def extract_proportions_smooth(windows, labels, percentage, ref, config):
+    smooth_frac = config.smooth_frac
+    r2_min = config.r2_threshold
     in_out = np.empty(shape=len(windows))
     for i, w in enumerate(windows):
         start = labels["start_idx"].iloc[ref[i]]
         end = labels["end_idx"].iloc[ref[i]]
         lower_limits = labels["LLA_Yale_affected_beta"].loc[start:end]
         upper_limits = labels["ULA_Yale_affected_beta"].loc[start:end]
+
+        r2 = labels["Yale_R2full_affected"].loc[start:end]
+        if r2_min > 0.0 and (r2 < r2_min).any():
+            in_out[i] = np.nan
+            continue
 
         # if there's missing data in the LA calculation, label is na
         if lower_limits.isna().any() or upper_limits.isna().any():
@@ -179,7 +189,7 @@ def extract_proportions_smooth(windows, labels, percentage, ref):
         frac_out = out.mean()
 
         # set true if outside <= 20% of the time
-        in_out[i] = frac_out <= SMOOTH_FRAC_OUT_MIN
+        in_out[i] = frac_out <= smooth_frac
         # label as “outside AR” if >46% of time outside AR: which means that "inside AR" if >=54% of time inside
         # in_out[i] = frac_out <= 0.46
 
@@ -263,12 +273,13 @@ def impute(window, strategy="lin_interpolate"):
     return window
 
 
-def get_window(data, index, coords, window_index, window_s, percentage=0.5):
+def get_window(data, index, coords, window_index, window_s, config):
     # will obtain window start and end idx, plus total length and overlap length (in tokens)
     # inputs: data (dataset with data of interest), index (contains segment information),
     # coords (contains labels and their coordinates in time), window_index (token index of label value in window),
     # window_s (duration of window in seconds), percentage (max percentage window allowed to overlap with gap)
     # compute closest idx for data that matches coords
+    percentage = config.percentage
     seg_start = index["starttime"].iloc[coords["segment"]].to_numpy()
     seg_end = index["endtime"].iloc[coords["segment"]].to_numpy()
     seg_freq = index["frequency"].iloc[coords["segment"]].to_numpy()
@@ -362,7 +373,11 @@ def make_pad(data_file, window_df):
 # TODO: needs a window combiner for when I will ask it to do more than one var
 
 
-def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percentage):
+def get_windows_var(v, ptid, window_index, window_s, config):
+    file_path = config.data_file
+    strategy = config.strategy
+    percentage = config.percentage
+
     with h5py.File(file_path, "r") as f:
         # load labels[targets] and var timeseries
         labels = pd.DataFrame(f[f"{ptid}/labels"][...][TARGETS + ["DateTime"]])
@@ -451,7 +466,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
         if labels.shape[0] != 0:
             # select out the windows
             df, labels = get_window(
-                ts, ts_index, labels, window_index, window_s, percentage=percentage
+                ts, ts_index, labels, window_index, window_s, config
             )
 
             # if I am smoothing, I will drop the windows without enough labels
@@ -477,7 +492,7 @@ def get_windows_var(v, ptid, file_path, window_index, window_s, strategy, percen
                 if strategy == "smooth":
                     ref = df[:, 4].tolist()
                 in_out = extract_proportions(
-                    windows, labels, percentage=percentage, strategy=strategy, ref=ref
+                    windows, labels, config, ref=ref
                 )
 
             # extract window data: impute

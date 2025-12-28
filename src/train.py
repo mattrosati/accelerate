@@ -25,7 +25,7 @@ import dask.array as da
 from sklearn import svm
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import RandomizedSearchCV, RepeatedStratifiedKFold
-from sklearn.metrics import balanced_accuracy_score, auc
+from sklearn.metrics import balanced_accuracy_score, auc, confusion_matrix, ConfusionMatrixDisplay
 
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -189,18 +189,18 @@ if __name__ == "__main__":
             "subsample": tune.quniform(0.25, 0.75, 0.05),
             "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
             "gamma": tune.quniform(0, 5, 0.25),
-            "reg_alpha": tune.loguniform(1e-5, 20.0),
-            "reg_lambda": tune.loguniform(1e-5, 20.0),
+            "reg_alpha": tune.loguniform(1e-3, 20.0),
+            "reg_lambda": tune.loguniform(1e-3, 20.0),
         }
         n_iter = (len(list(params.keys())) - 2) * 10
     elif args.model == "rocket":
         multivar = True
         params = {
-            "n_kernels": tune.choice([5_000, 10_000, 15_000]),
-            "max_dilations_per_kernel": tune.choice([32, 64]),
-            "n_features_per_kernel": tune.qrandint(4, 16, 2),
-            "estimator__alpha": tune.loguniform(1e-3, 1e3),  # Ridge reg
-            "class_weight": tune.choice([None, "balanced"]),
+            "n_kernels": tune.choice([1_000, 2_500, 5_000]),
+            "max_dilations_per_kernel": tune.choice([8, 16]),
+            "n_features_per_kernel": tune.qrandint(4, 10, 2),
+            "estimator__alpha": tune.loguniform(1e-1, 1e5),  # Ridge reg
+            "class_weight": "balanced",
         }
         model = MultiRocketClassifier(estimator=RidgeClassifier())
     elif args.model == "knn_multivar":
@@ -216,14 +216,13 @@ if __name__ == "__main__":
         # needs params
         # needs model
 
-    cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3)  # repeats five folds 2 times
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
         scoring=metrics,
         num_samples=n_iter,
         rank_metric="mean_val_auc",
-        cv=[5, 3],
+        cv=[5, 3], # repeats five folds 3 times
         store_path=model_store,
         model_name=f"{args.model}_{args.data_mode}",
     )

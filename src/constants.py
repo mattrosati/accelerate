@@ -2,6 +2,7 @@ TARGETS = [
     "MAPopt_Yale_affected_beta",
     "LLA_Yale_affected_beta",
     "ULA_Yale_affected_beta",
+    "Yale_R2full_affected",
 ]
 
 FEATURES = ["hr", "rso2r", "rso2l", "spo2", "abp"]
@@ -10,5 +11,4 @@ PERCENT_IN_MIN = 0.5
 PERCENT_NA_MAX = 0.25
 WINDOW_SECONDS = 60
 
-SMOOTH_FRAC_OUT_MIN = 0.20
-SMOOTH_FRAC_OUT_MIN_2 = 0.46
+SMOOTH_FRAC_OUT_MIN = 0.46
