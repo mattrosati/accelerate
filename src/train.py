@@ -24,7 +24,7 @@ import dask.array as da
 
 from sklearn import svm
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import RandomizedSearchCV, RepeatedStratifiedKFold
+from sklearn.model_selection import RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedGroupKFold
 from sklearn.metrics import balanced_accuracy_score, auc, confusion_matrix, ConfusionMatrixDisplay
 
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_mode",
         type=str,
-        choices=["raw", "pca", "fpca", "separate_pca"],
+        choices=["raw", "pca", "fpca", "separate_pca", "chronos"],
         help="Transofrmations applied to mode prior to loading.",
         default="raw",
     )
@@ -104,6 +104,10 @@ if __name__ == "__main__":
         f = "fpca_x.zarr"
     elif args.data_mode == "separate_pca":
         f = "separate_decomp_x.zarr"
+    elif args.data_mode == "chronos":
+        f = "chronos_x.zarr"
+    elif args.data_mode == "design":
+        f = "design_x.zarr"
     X_train = da.from_zarr(os.path.join(args.train_dir, "permanent", "train", f))
     labels = pd.read_pickle(
         os.path.join(args.train_dir, "permanent", "train", "labels.pkl")
@@ -115,8 +119,9 @@ if __name__ == "__main__":
     if args.debug:
         print("Using a smaller dataset size to be speedy.")
         length = 10_000
-        keys = da.random.random(X_train.shape[0], chunks=X_train.chunksize[0])
-        perm = np.argsort(keys)[:length]
+
+        n = X_train.shape[0]
+        perm = np.random.permutation(n)[:length]   # 1D dask array of indices
         X_train = X_train[perm]
         y_train = y_train[perm]
         groups = groups[perm]
@@ -142,7 +147,7 @@ if __name__ == "__main__":
     n_iter = 30
     multivar = False
     if args.model == "log_reg":
-        model = LogisticRegression(n_jobs=1, solver="saga", max_iter=10_000)
+        model = LogisticRegression(n_jobs=1, solver="saga", max_iter=10_000, class_weight='balanced', fit_intercept=True)
         params = {
             "penalty": tune.choice(["l2", "l1"]),
             "C": tune.loguniform(0.001, 100),
@@ -217,6 +222,44 @@ if __name__ == "__main__":
         # needs params
         # needs model
 
+    if args.run_name == "strict":
+        if args.model == "rand_forest":
+            model = RandomForestClassifier()
+            params = {
+                "n_estimators": tune.lograndint(10, 40),
+                "max_depth": tune.qrandint(5, 20, 5),
+                "max_features": tune.choice([0.005, 0.02, 0.05]),
+                "min_samples_split": tune.randint(30, 200),
+                "min_samples_leaf": tune.randint(30, 100),
+                "class_weight": "balanced",
+            }
+            n_iter = (len(list(params.keys())) - 1) * 10
+        if args.model == "xgb":
+            model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
+            params = {
+                "n_estimators": tune.lograndint(10, 40),
+                "max_depth": tune.randint(2, 6),
+                "learning_rate": tune.loguniform(1e-3, 1e-1),
+                "subsample": tune.quniform(0.5, 0.9, 0.05),
+                "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
+                "gamma": tune.quniform(5, 15, 0.25),
+                "reg_alpha": tune.loguniform(1.0, 500.0),
+                "reg_lambda": tune.loguniform(10.0, 1000.0),
+                'min_child_weight': tune.loguniform(1.0, 50.0),
+            }
+            n_iter = (len(list(params.keys())) - 1) * 10
+        if args.model == "rocket":
+            multivar = True
+            params = {
+                "n_kernels": tune.lograndint(100, 1_500),
+                "max_dilations_per_kernel": tune.choice([4, 8, 12]),
+                "n_features_per_kernel": tune.qrandint(4, 12, 2),
+                "estimator__alpha": tune.loguniform(1.0, 1e7),  # Ridge reg
+                "class_weight": "balanced",
+            }
+            model = MultiRocketClassifier(estimator=RidgeClassifier())
+
+
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
@@ -266,8 +309,27 @@ if __name__ == "__main__":
         open(os.path.join(model_store, f"{args.model}_{args.data_mode}.pkl"), "wb"),
     )
 
-    print("Search results:")
-    df = pd.DataFrame(search.cv_results_())
-    print(df)
+    # compute confusion matrix and save
+    # get new train val split
+    print("Making confusion matrices on a fresh split.")
+    conf_train_idx, conf_val_idx = next(
+        StratifiedGroupKFold(n_splits = 5, shuffle=True, random_state=42).split(X_train, y_train, groups)
+    )
 
-    # results will be saved in ray tuner logs
+    # fit new model
+    best_model = search.best_estimator_
+    best_model.fit(X_train[conf_train_idx], y_train.to_numpy()[conf_train_idx])
+
+    # get confusion matrix
+    y_true = y_train.to_numpy()[conf_val_idx] 
+    y_pred = best_model.predict(X_train[conf_val_idx])
+    conf_mat = confusion_matrix(y_true, y_pred)
+    
+    # save confusion matrix
+    dump(
+        conf_mat,
+        open(os.path.join(model_store, f"{args.model}_{args.data_mode}_confmat.pkl"), "wb"),
+    )
+    conf_mat = confusion_matrix(y_true, y_pred, normalize='all')
+    print(conf_mat)
+    # print("Could not compute confusion matrix.")
