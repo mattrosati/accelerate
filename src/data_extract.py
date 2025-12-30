@@ -52,6 +52,8 @@ def normalize(
                 da.ravel(z_arr), size=n_samples, replace=False
             ).compute()
 
+        orig_shape = z_arr.shape
+        z_arr = z_arr.reshape(-1, 1)
         if scaler == "robust":
             if v == "spo2":
                 # flip tail
@@ -73,6 +75,7 @@ def normalize(
                 scaler = StandardScaler()
                 scaled_values = scaler.fit_transform(z_arr)
 
+        scaled_values = scaled_values.reshape(orig_shape)
         dump(scaler, open(scaler_store, "wb"))
         da.to_zarr(
             scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr")
@@ -117,6 +120,8 @@ def normalize(
         # transform test set
         z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
         z_arr_test = da.from_zarr(z_arr_store_test)
+        orig_shape = z_arr_test.shape
+        z_arr_test = z_arr_test.reshape(-1, 1)
 
         if scaler == "robust":
             if v == "spo2":
@@ -133,6 +138,7 @@ def normalize(
             else:
                 z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
                 scaled_values = scaler.transform(z_arr_test)
+        scaled_values = scaled_values.reshape(orig_shape)
         da.to_zarr(
             scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
         )
@@ -188,7 +194,7 @@ def generate_final(save_dir, variables, transform=""):
             if i == 0:
                 base = z_arr
             else:
-                base = da.concatenate([base, z_arr], axis=1)
+                base = da.concatenate([base, z_arr], axis=-1)
 
         da.to_zarr(base, url=os.path.join(save_dir, s, f"{transform}x.zarr"))
 
@@ -441,7 +447,7 @@ if __name__ == "__main__":
         "-t",
         "--transforms",
         nargs="+",
-        choices=["pca", "separate_pca", "fpca", "multivar_fpca", "none"],
+        choices=["pca", "separate_pca", "fpca", "multivar_fpca", "none", "chronos"],
         help="What kind of downstream transforms to do and save.",
         default=["pca"],
     )
@@ -457,7 +463,7 @@ if __name__ == "__main__":
         "--scaler",
         choices=["standard", "robust"],
         help="Scaler to use.",
-        default="standard",
+        default="robust",
     )
     parser.add_argument(
         "-x",
@@ -500,7 +506,7 @@ if __name__ == "__main__":
     if args.match_grid != 0:
         dataset_name = f"downsample{args.match_grid}_" + dataset_name
     if args.mode == "smooth":
-        dataset_name = f"smooth{args.smooth_frac}_" + dataset_name
+        dataset_name = f"smooth{args.smooth_frac:.2f}_" + dataset_name
     if args.scaler == "robust":
         dataset_name = "robust_" + dataset_name
     if args.variance != 95:
@@ -508,7 +514,8 @@ if __name__ == "__main__":
     if args.frequency < 60:
         dataset_name = f"freq{args.frequency}_" + dataset_name
     if args.r2_threshold > 0.0:
-        dataset_name = f"{args.r2_threshold}r2_" + dataset_name
+        dataset_name = f"{args.r2_threshold:.2f}r2_" + dataset_name
+    print(f"DATASET = {os.path.join(args.save_dir, dataset_name)}")
 
     print(
         f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
@@ -575,7 +582,7 @@ if __name__ == "__main__":
 
     # delete temp_dir
     if not args.debug:
-        shutil.rmtree(temp_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     print("")
 
@@ -652,6 +659,36 @@ if __name__ == "__main__":
             if "_scaled" in f:
                 shutil.rmtree(os.path.join(save_dir, s, f))
 
+    if "chronos" in args.transforms and args.match_grid >= 0:
+        from chronos import Chronos2Pipeline
+        import torch
+        assert torch.cuda.is_available(), "Chronos transform requires a GPU."
+        print("Generating Chronos embeddings:")
+
+        pipeline = Chronos2Pipeline.from_pretrained("amazon/chronos-2", device_map="cuda")
+        batch_size = 1024
+
+        for split in ['train', 'test']:
+            chronos_path = os.path.join(save_dir, split, "chronos_x.zarr")
+            s = da.from_zarr(os.path.join(save_dir, split, data_string))
+            z = zarr.open(chronos_path, mode="w", shape=(s.shape[0], pipeline.model.model_dim), dtype="float32")
+            print(z.shape)
+
+            n_batches = s.shape[0] // batch_size + 1
+            for i in tqdm(range(n_batches)):
+                end = min((i+1)*batch_size, s.shape[0])
+                x_input = s[i*batch_size:end, :].compute()
+                x_input = x_input.reshape(x_input.shape[0], len(args.variables), -1)
+                x_tensor = torch.tensor(x_input).float()
+                out = [i.cpu().numpy().mean(axis=(0,1)) for i in pipeline.embed(inputs=x_tensor)[0]]
+                out_embed = np.vstack(out)
+
+                # needs to be saved back as zarr, can't concatenate into memory
+                z[i*batch_size:end, :] = out_embed
+            
+            # print(z.mean().compute())
+    
+    
     if (
         os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent"))
         and not args.overwrite_permanent
@@ -662,8 +699,17 @@ if __name__ == "__main__":
     elif not os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent")):
         shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
     else:
-        shutil.rmtree(os.path.join(args.save_dir, dataset_name, "permanent"))
-        shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
+        # if overwriting, check if file names are same (then delete old and overwrite) or different (then just add new)
+        for split in ["train", "test"]:
+            permanent_path = os.path.join(args.save_dir, dataset_name, "permanent", split)
+            new_path = os.path.join(save_dir, split)
+            for f in os.listdir(new_path):
+                if f in os.listdir(permanent_path):
+                    if os.path.isdir(os.path.join(permanent_path, f)):
+                        shutil.rmtree(os.path.join(permanent_path, f))
+                    else:
+                        os.remove(os.path.join(permanent_path, f))
+                shutil.move(os.path.join(new_path, f), os.path.join(permanent_path, f))
 
     X_train = da.from_zarr(
         os.path.join(args.save_dir, dataset_name, "permanent", "train", "x.zarr")
@@ -680,5 +726,6 @@ if __name__ == "__main__":
         f"{y_train.sum() / y_train.shape[0] * 100:0.1f}% of training windows are inside AR limits for mode {args.mode}."
     )
     print("Dataset creation complete.")
+    print(f"DATASET_NAME={os.path.join(args.save_dir, dataset_name)}")
     print(f"Random seed {np.random.default_rng().integers(0, 1e6)}")
     print("")
