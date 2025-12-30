@@ -146,10 +146,13 @@ if __name__ == "__main__":
 
         # make one dataset for labels with custom dtype
         nan_value = float(global_f[ptid + "/raw"].attrs["invalidValue"][0])
-        df = df.fillna(value=nan_value)
+        if "invalid_val" not in global_f.attrs.keys():
+            global_f.attrs["invalid_val"] = nan_value
+        else:
+            assert global_f.attrs["invalid_val"] == nan_value
+        df = df.fillna(value=global_f.attrs["invalid_val"])
         arr = df.to_records(index=False)
         pt_group.create_dataset("labels", data=arr, dtype=arr.dtype)
-        global_f.attrs["invalid_val"] = nan_value
 
         # prep a group for processed data
         processed = pt_group.require_group("processed")

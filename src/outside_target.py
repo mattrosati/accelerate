@@ -25,21 +25,25 @@ from constants import *
 from process_utils import *
 
 
-def main(ptid, file_path, mode, temp_dir_path):
+def main(ptid, config):
+    file_path = config.data_file
+    mode = config.mode
+    temp_dir_path = config.temp_dir
 
     window_index, window_s = get_window_index(mode), WINDOW_SECONDS
     strategy = "mean" if mode == "mean" else "count"
     percentage = 0.0 if strategy == "mean" else PERCENT_IN_MIN
 
+    config.strategy = strategy
+    config.percentage = percentage
+
     # extract data
     data, _ = get_windows_var(
         "abp",
         ptid,
-        file_path,
         window_index,
         window_s,
-        strategy=strategy,
-        percentage=percentage,
+        config,
     )
 
     # writes data in defined directory
@@ -110,6 +114,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    config = args
 
     np.random.seed(420)
 
@@ -122,7 +127,7 @@ if __name__ == "__main__":
 
     # will do everything and write to file in temp_dir
     func = partial(
-        main, file_path=args.data_file, mode=args.mode, temp_dir_path=args.temp_dir
+        main, config=config,
     )
     results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 

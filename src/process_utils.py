@@ -394,6 +394,8 @@ def get_windows_var(v, ptid, window_index, window_s, config):
         # labels.dropna(inplace=True)
 
         #make everything uint64
+        assert labels["DateTime"].notna().all(), "NaNs in DateTime"
+        assert (labels["DateTime"] > 0).all(), "Non-positive DateTime"
         labels.DateTime = labels.DateTime.astype(np.uint64)
         ts_index = ts_index.astype(np.uint64)
 
@@ -429,8 +431,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
         problem_segments = quality[quality["value"] != 0]
 
         # merge
-        ts_index_orig = ts_index.copy()
-        ts_index = merge_quality_intervals(ts_index, problem_segments)
+        ts_index = merge_quality_intervals(ts_index.copy(), problem_segments)
         ts_index = ts_index.astype(np.uint64)
 
         if np.any(

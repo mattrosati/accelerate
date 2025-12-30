@@ -8,6 +8,16 @@ from ray.tune.search.bohb import TuneBOHB
 from ray.tune.search.optuna import OptunaSearch
 from ray.tune.search import ConcurrencyLimiter
 import optuna
+import warnings
+
+# Ray: disable deprecated env override behavior
+os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+
+# Optuna experimental warnings
+warnings.filterwarnings(
+    "ignore",
+    category=optuna.exceptions.ExperimentalWarning
+)
 
 
 def train_cv(config, X, y, folds, estimator, scoring):
