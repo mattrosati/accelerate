@@ -24,8 +24,17 @@ import dask.array as da
 
 from sklearn import svm
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedGroupKFold
-from sklearn.metrics import balanced_accuracy_score, auc, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.model_selection import (
+    RandomizedSearchCV,
+    RepeatedStratifiedKFold,
+    StratifiedGroupKFold,
+)
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    auc,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+)
 
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -121,7 +130,7 @@ if __name__ == "__main__":
         length = 10_000
 
         n = X_train.shape[0]
-        perm = np.random.permutation(n)[:length]   # 1D dask array of indices
+        perm = np.random.permutation(n)[:length]  # 1D dask array of indices
         X_train = X_train[perm]
         y_train = y_train[perm]
         groups = groups[perm]
@@ -147,7 +156,13 @@ if __name__ == "__main__":
     n_iter = 30
     multivar = False
     if args.model == "log_reg":
-        model = LogisticRegression(n_jobs=1, solver="saga", max_iter=10_000, class_weight='balanced', fit_intercept=True)
+        model = LogisticRegression(
+            n_jobs=1,
+            solver="saga",
+            max_iter=10_000,
+            class_weight="balanced",
+            fit_intercept=True,
+        )
         params = {
             "penalty": tune.choice(["l2", "l1"]),
             "C": tune.loguniform(0.001, 100),
@@ -196,7 +211,7 @@ if __name__ == "__main__":
             "gamma": tune.quniform(0.5, 10, 0.25),
             "reg_alpha": tune.loguniform(1e-1, 50.0),
             "reg_lambda": tune.loguniform(1.0, 100.0),
-            'min_child_weight': tune.loguniform(1.0, 50.0)
+            "min_child_weight": tune.loguniform(1.0, 50.0),
         }
         n_iter = (len(list(params.keys())) - 1) * 10
     elif args.model == "rocket":
@@ -245,7 +260,7 @@ if __name__ == "__main__":
                 "gamma": tune.quniform(5, 15, 0.25),
                 "reg_alpha": tune.loguniform(1.0, 500.0),
                 "reg_lambda": tune.loguniform(10.0, 1000.0),
-                'min_child_weight': tune.loguniform(1.0, 50.0),
+                "min_child_weight": tune.loguniform(1.0, 50.0),
             }
             n_iter = (len(list(params.keys())) - 1) * 10
         if args.model == "rocket":
@@ -259,14 +274,13 @@ if __name__ == "__main__":
             }
             model = MultiRocketClassifier(estimator=RidgeClassifier())
 
-
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
         scoring=metrics,
         num_samples=n_iter,
         rank_metric="mean_val_auc",
-        cv=[5, 3], # repeats five folds 3 times
+        cv=[5, 3],  # repeats five folds 3 times
         store_path=model_store,
         model_name=f"{args.model}_{args.data_mode}",
     )
@@ -287,7 +301,7 @@ if __name__ == "__main__":
     num_channels = len(channels)
     print("Detected channels:", channels)
     print("num_channels =", num_channels)
-    
+
     # prep data for multivar models
     if multivar and "downsample" in args.train_dir:
 
@@ -313,7 +327,9 @@ if __name__ == "__main__":
     # get new train val split
     print("Making confusion matrices on a fresh split.")
     conf_train_idx, conf_val_idx = next(
-        StratifiedGroupKFold(n_splits = 5, shuffle=True, random_state=42).split(X_train, y_train, groups)
+        StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42).split(
+            X_train, y_train, groups
+        )
     )
 
     # fit new model
@@ -321,15 +337,18 @@ if __name__ == "__main__":
     best_model.fit(X_train[conf_train_idx], y_train.to_numpy()[conf_train_idx])
 
     # get confusion matrix
-    y_true = y_train.to_numpy()[conf_val_idx] 
+    y_true = y_train.to_numpy()[conf_val_idx]
     y_pred = best_model.predict(X_train[conf_val_idx])
     conf_mat = confusion_matrix(y_true, y_pred)
-    
+
     # save confusion matrix
     dump(
         conf_mat,
-        open(os.path.join(model_store, f"{args.model}_{args.data_mode}_confmat.pkl"), "wb"),
+        open(
+            os.path.join(model_store, f"{args.model}_{args.data_mode}_confmat.pkl"),
+            "wb",
+        ),
     )
-    conf_mat = confusion_matrix(y_true, y_pred, normalize='all')
+    conf_mat = confusion_matrix(y_true, y_pred, normalize="all")
     print(conf_mat)
     # print("Could not compute confusion matrix.")

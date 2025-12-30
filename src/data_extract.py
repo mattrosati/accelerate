@@ -213,7 +213,7 @@ def intersection_windows(variables, split_dict, temp_dir):
                     combined = labels
                 else:
                     combined = combined.merge(labels, how="inner", on="datetime")
-            
+
             # save combined
             combined.to_pickle(os.path.join(temp_dir, f"{p}_combined_labels.pkl"))
 
@@ -254,7 +254,11 @@ def extract_data(ptid, v, temp_dir_path, config):
 
     # extract windows for this patient and variable
     in_out, windows = get_windows_var(
-        v, ptid, window_index, window_s, config,
+        v,
+        ptid,
+        window_index,
+        window_s,
+        config,
     )
 
     broken_bool = in_out is None or len(in_out) == 0
@@ -263,7 +267,6 @@ def extract_data(ptid, v, temp_dir_path, config):
         return ptid
 
     w_vectors = np.stack([k["w"] for k in windows], axis=0)
-    
 
     assert w_vectors.shape[0] == in_out.shape[0]
     # save to a temp file as a zarr array
@@ -352,9 +355,10 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
                         z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
                     ).mean(axis=-1)
                 elif strategy == "median":
-                    downsampled = da.median(da.reshape(
-                        z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
-                    ), axis=-1)
+                    downsampled = da.median(
+                        da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)),
+                        axis=-1,
+                    )
                 print(f"Downsampled to {downsampled.shape}")
             else:
                 downsampled = z_arr
@@ -363,7 +367,9 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
             if frequency < 60:
                 points_per_freq = 60 // frequency
                 # Reshape to (N, timesteps, points_per_freq)
-                downsampled = da.reshape(downsampled, shape=(downsampled.shape[0], -1, points_per_freq))
+                downsampled = da.reshape(
+                    downsampled, shape=(downsampled.shape[0], -1, points_per_freq)
+                )
 
                 if strategy == "mean":
                     downsampled = downsampled.mean(axis=-1)
@@ -374,7 +380,6 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
             da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))
             shutil.rmtree(zarr_all_store)
             shutil.move(os.path.join(save_dir, s, f"{v}_x_ds.zarr"), zarr_all_store)
-
 
     return None
 
@@ -391,7 +396,9 @@ def do_pca(save_dir, z_arr_train, z_arr_test, variance=0.95):
     selected_dim = (
         np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > variance][0] + 1
     )
-    print(f"- Using {selected_dim} dimensions at threshold variance of {variance*100:0.0f}%.")
+    print(
+        f"- Using {selected_dim} dimensions at threshold variance of {variance*100:0.0f}%."
+    )
     X_train = pca.transform(z_arr_train)[:, :selected_dim]
     X_test = pca.transform(z_arr_test)[:, :selected_dim]
     return X_train, X_test
@@ -482,16 +489,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--smooth_frac",
         "-sf",
-        type = float,
+        type=float,
         default=SMOOTH_FRAC_OUT_MIN,
-        help="Minimum fraction of labels to be out to label window as out if smoothing."
+        help="Minimum fraction of labels to be out to label window as out if smoothing.",
     )
     parser.add_argument(
         "--r2_threshold",
         "-r",
-        type = float,
+        type=float,
         default=-1e2,
-        help="Minimum R2 value for labels to be considered good."
+        help="Minimum R2 value for labels to be considered good.",
     )
 
     args = parser.parse_args()
@@ -559,7 +566,9 @@ if __name__ == "__main__":
             temp_dir_path=os.path.join(temp_dir, var),
             config=config,
         )
-        results = process_map(func, ptids, max_workers=1 if args.debug else os.cpu_count(), chunksize=1)
+        results = process_map(
+            func, ptids, max_workers=1 if args.debug else os.cpu_count(), chunksize=1
+        )
 
         # remove invalid patients from split dict
         broken_pts = [r for r in results if r is not None]
@@ -578,7 +587,9 @@ if __name__ == "__main__":
     if args.match_grid == 1:
         downsample(args.variables, save_dir, strategy="mean", frequency=args.frequency)
     elif args.match_grid == 2:
-        downsample(args.variables, save_dir, strategy="median", frequency=args.frequency)
+        downsample(
+            args.variables, save_dir, strategy="median", frequency=args.frequency
+        )
 
     # delete temp_dir
     if not args.debug:
@@ -613,7 +624,9 @@ if __name__ == "__main__":
             )
 
             print(f"Doing PCA for var {v}:")
-            X_train, X_test = do_pca(save_dir, z_arr_train, z_arr_test, variance=args.variance/100)
+            X_train, X_test = do_pca(
+                save_dir, z_arr_train, z_arr_test, variance=args.variance / 100
+            )
 
             da.to_zarr(
                 X_train,
@@ -644,7 +657,9 @@ if __name__ == "__main__":
 
     if "pca" in args.transforms:
         print("Doing global PCA")
-        X_train, X_test = do_pca(save_dir, base_arr_train, base_arr_test, variance=args.variance/100)
+        X_train, X_test = do_pca(
+            save_dir, base_arr_train, base_arr_test, variance=args.variance / 100
+        )
         print(
             f"Train and test datasets generated adequately with combined PCAs. {X_train.shape[0]} windows in train and {X_test.shape[0]} in test with {X_train.shape[1]} dimensions."
         )
@@ -662,33 +677,43 @@ if __name__ == "__main__":
     if "chronos" in args.transforms and args.match_grid >= 0:
         from chronos import Chronos2Pipeline
         import torch
+
         assert torch.cuda.is_available(), "Chronos transform requires a GPU."
         print("Generating Chronos embeddings:")
 
-        pipeline = Chronos2Pipeline.from_pretrained("amazon/chronos-2", device_map="cuda")
+        pipeline = Chronos2Pipeline.from_pretrained(
+            "amazon/chronos-2", device_map="cuda"
+        )
         batch_size = 1024
 
-        for split in ['train', 'test']:
+        for split in ["train", "test"]:
             chronos_path = os.path.join(save_dir, split, "chronos_x.zarr")
             s = da.from_zarr(os.path.join(save_dir, split, data_string))
-            z = zarr.open(chronos_path, mode="w", shape=(s.shape[0], pipeline.model.model_dim), dtype="float32")
+            z = zarr.open(
+                chronos_path,
+                mode="w",
+                shape=(s.shape[0], pipeline.model.model_dim),
+                dtype="float32",
+            )
             print(z.shape)
 
             n_batches = s.shape[0] // batch_size + 1
             for i in tqdm(range(n_batches)):
-                end = min((i+1)*batch_size, s.shape[0])
-                x_input = s[i*batch_size:end, :].compute()
+                end = min((i + 1) * batch_size, s.shape[0])
+                x_input = s[i * batch_size : end, :].compute()
                 x_input = x_input.reshape(x_input.shape[0], len(args.variables), -1)
                 x_tensor = torch.tensor(x_input).float()
-                out = [i.cpu().numpy().mean(axis=(0,1)) for i in pipeline.embed(inputs=x_tensor)[0]]
+                out = [
+                    i.cpu().numpy().mean(axis=(0, 1))
+                    for i in pipeline.embed(inputs=x_tensor)[0]
+                ]
                 out_embed = np.vstack(out)
 
                 # needs to be saved back as zarr, can't concatenate into memory
-                z[i*batch_size:end, :] = out_embed
-            
+                z[i * batch_size : end, :] = out_embed
+
             # print(z.mean().compute())
-    
-    
+
     if (
         os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent"))
         and not args.overwrite_permanent
@@ -701,7 +726,9 @@ if __name__ == "__main__":
     else:
         # if overwriting, check if file names are same (then delete old and overwrite) or different (then just add new)
         for split in ["train", "test"]:
-            permanent_path = os.path.join(args.save_dir, dataset_name, "permanent", split)
+            permanent_path = os.path.join(
+                args.save_dir, dataset_name, "permanent", split
+            )
             new_path = os.path.join(save_dir, split)
             for f in os.listdir(new_path):
                 if f in os.listdir(permanent_path):

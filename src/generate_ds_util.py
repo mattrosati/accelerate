@@ -13,9 +13,9 @@ smooth_frac = [0.2, 0.46]
 
 lines = []
 
-for (
-    w, v, g, x, f, r, s
-) in product(window_size, variables, downsample, variance, frequency, r2_threshold, smooth_frac):
+for w, v, g, x, f, r, s in product(
+    window_size, variables, downsample, variance, frequency, r2_threshold, smooth_frac
+):
 
     base = f"-m smooth -g {g} -w {w} -x {x} -f {f} -r {r} -sf {s}"
     if v != "":

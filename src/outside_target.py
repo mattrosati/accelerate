@@ -127,7 +127,8 @@ if __name__ == "__main__":
 
     # will do everything and write to file in temp_dir
     func = partial(
-        main, config=config,
+        main,
+        config=config,
     )
     results = process_map(func, ptids, max_workers=os.cpu_count(), chunksize=1)
 

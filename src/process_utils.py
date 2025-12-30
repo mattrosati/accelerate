@@ -8,12 +8,15 @@ import pandas as pd
 from constants import *
 
 from dataclasses import dataclass
-    
+
+
 def robust_floor(x, tol=1e-5):
     return np.floor(x + tol)
 
+
 def robust_ceil(x, tol=1e-5):
     return np.ceil(x - tol)
+
 
 def merge_quality_intervals(valid_df, bad_df):
 
@@ -193,7 +196,6 @@ def extract_proportions_smooth(windows, labels, percentage, ref, config):
         # label as “outside AR” if >46% of time outside AR: which means that "inside AR" if >=54% of time inside
         # in_out[i] = frac_out <= 0.46
 
-
     return in_out
 
 
@@ -301,7 +303,7 @@ def get_window(data, index, coords, window_index, window_s, config):
     window_end = window_start + window_us
     window_length = window_end - window_start
     total_window_token_length = (
-        ((window_length * seg_freq) / 1e6 ).round().astype(np.uint64)
+        ((window_length * seg_freq) / 1e6).round().astype(np.uint64)
     )
 
     # check whether overlapping with gap
@@ -334,13 +336,11 @@ def get_window(data, index, coords, window_index, window_s, config):
     window_start_clipped = np.maximum(seg_start, window_start)
     window_end_clipped = np.minimum(seg_end, window_end)
     window_start_tokens = (
-        (robust_floor(((window_start_clipped - seg_start) * seg_freq) / 1e6))
-        .astype(np.uint64)
-    )
+        robust_floor(((window_start_clipped - seg_start) * seg_freq) / 1e6)
+    ).astype(np.uint64)
     window_end_tokens = (
-        (robust_floor(((window_end_clipped - seg_start) * seg_freq) / 1e6))
-        .astype(np.uint64)
-    )
+        robust_floor(((window_end_clipped - seg_start) * seg_freq) / 1e6)
+    ).astype(np.uint64)
 
     w_start_idx = (
         index["startidx"].iloc[clean["segment"]].to_numpy() + window_start_tokens
@@ -393,7 +393,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
         labels.replace(invalid_val, np.nan, inplace=True)
         # labels.dropna(inplace=True)
 
-        #make everything uint64
+        # make everything uint64
         assert labels["DateTime"].notna().all(), "NaNs in DateTime"
         assert (labels["DateTime"] > 0).all(), "Non-positive DateTime"
         labels.DateTime = labels.DateTime.astype(np.uint64)
@@ -492,9 +492,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 ref = None
                 if strategy == "smooth":
                     ref = df[:, 4].tolist()
-                in_out = extract_proportions(
-                    windows, labels, config, ref=ref
-                )
+                in_out = extract_proportions(windows, labels, config, ref=ref)
 
             # extract window data: impute
             windows = [
@@ -537,7 +535,6 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 df["in?"] = in_out
                 df["ptid"] = ptid
                 df["invalid"] = df["in?"].isna()
-
 
                 if len(in_out) == 0:
                     print("No valid windows extracted for patient:", ptid)
