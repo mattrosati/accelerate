@@ -743,7 +743,7 @@ if __name__ == "__main__":
                     else:
                         os.remove(os.path.join(permanent_path, f))
                 shutil.move(os.path.join(new_path, f), os.path.join(permanent_path, f))
-        
+
         # overwrite scalers
         perm_scalers = os.path.join(args.top_dir, dataset_name, "permanent", "scalers")
         shutil.rmtree(perm_scalers)

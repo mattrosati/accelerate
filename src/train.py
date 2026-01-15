@@ -112,11 +112,18 @@ if __name__ == "__main__":
     random.seed(420)
 
     # if train_dir contains var and params contains raw, design, or chronos, skip python run
-    if "var" in os.path.basename(os.path.normpath(args.train_dir)) and args.data_mode in ["raw", "design", "chronos", "design_w"]:
-        print(f"Skipping: TRAIN_DIR contains 'var' and PARAMS contains '{args.data_mode}'")
+    if "var" in os.path.basename(
+        os.path.normpath(args.train_dir)
+    ) and args.data_mode in ["raw", "design", "chronos", "design_w"]:
+        print(
+            f"Skipping: TRAIN_DIR contains 'var' and PARAMS contains '{args.data_mode}'"
+        )
         sys.exit(0)
     # if train_dir contains freq and params contains raw, skip python run
-    elif "freq" in os.path.basename(os.path.normpath(args.train_dir)) and "design" in args.data_mode:
+    elif (
+        "freq" in os.path.basename(os.path.normpath(args.train_dir))
+        and "design" in args.data_mode
+    ):
         print("Skipping: TRAIN_DIR contains 'freq' and PARAMS contains 'design'.")
         sys.exit(0)
 
@@ -315,7 +322,7 @@ if __name__ == "__main__":
         fs = SelectPercentile(score_func=mutual_info_classif)
         params = {f"m__{k}": v for k, v in params.items()}
         params["pmi__percentile"] = tune.qrandint(10, 60, 10)
-        model = Pipeline(steps=[('pmi',fs), ('m', model)])
+        model = Pipeline(steps=[("pmi", fs), ("m", model)])
         n_iter += 5
 
     model_name = f"{args.model}{'+sv' if args.select_var else ''}_{args.data_mode}"

@@ -136,8 +136,12 @@ if __name__ == "__main__":
     random.seed(420)
     pd.options.display.float_format = "{:.2f}".format
 
-    if "w_60s" in os.path.basename(args.train_dir) or "freq" in os.path.basename(args.train_dir):
-        print("Skipping design_feat.py because window too small (i.e., 60s) or frequency not 60.")
+    if "w_60s" in os.path.basename(args.train_dir) or "freq" in os.path.basename(
+        args.train_dir
+    ):
+        print(
+            "Skipping design_feat.py because window too small (i.e., 60s) or frequency not 60."
+        )
         sys.exit(0)
 
     # parse the save directory to get the information of interest
