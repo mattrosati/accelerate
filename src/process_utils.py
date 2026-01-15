@@ -373,7 +373,7 @@ def make_pad(data_file, window_df):
 # TODO: needs a window combiner for when I will ask it to do more than one var
 
 
-def get_windows_var(v, ptid, window_index, window_s, config):
+def get_windows_var(v, ptid, window_index, window_s, config, stride=False):
     file_path = config.data_file
     strategy = config.strategy
     percentage = config.percentage
@@ -398,6 +398,37 @@ def get_windows_var(v, ptid, window_index, window_s, config):
         assert (labels["DateTime"] > 0).all(), "Non-positive DateTime"
         labels.DateTime = labels.DateTime.astype(np.uint64)
         ts_index = ts_index.astype(np.uint64)
+
+        # **NEW: SUBSAMPLE LABELS TO GET NON-OVERLAPPING WINDOWS**
+        # Labels are typically every 60 seconds (1 minute)
+        # If window_s = 300, we want labels every 300 seconds (5 minutes)
+        # if stride:
+        #     labels = labels.sort_values('DateTime').reset_index(drop=True)
+            
+        #     # Keep only labels that are at least window_s apart
+        #     window_us = window_s * 1e6  # Convert seconds to microseconds
+            
+        #     keep_indices = []
+        #     if len(labels) > 0:
+        #         keep_indices.append(0)  # Always keep first label
+        #         last_kept_time = labels['DateTime'].iloc[0]
+                
+        #         for i in range(1, len(labels)):
+        #             current_time = labels['DateTime'].iloc[i]
+                    
+        #             # Only keep if at least window_s has elapsed since last kept window
+        #             if current_time - last_kept_time >= window_us:
+        #                 keep_indices.append(i)
+        #                 last_kept_time = current_time
+            
+        #     labels = labels.iloc[keep_indices].reset_index(drop=True)
+            
+        #     if len(labels) > 0:
+        #         print(f"Patient {ptid}, var {v}: Kept {len(keep_indices)} non-overlapping labels from original labels")
+        #     else:
+        #         print("No labels with striding")
+        
+        
 
         # replace with nan if value is 0 or less (incompatible with life)
         # replace invalid values with nan

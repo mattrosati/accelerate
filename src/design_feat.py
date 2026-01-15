@@ -31,7 +31,7 @@ from dask_ml.decomposition import PCA
 from sklearn.preprocessing import PowerTransformer
 
 
-def do_design(X_train, num_channels, channels):
+def do_design(X_train, num_channels, channels, whiten):
 
     timesteps = X_train.shape[1] // num_channels
     chan_to_index = {c: i for i, c in enumerate(channels)}
@@ -58,8 +58,8 @@ def do_design(X_train, num_channels, channels):
     print(stds.mean().compute())
 
     # whiten
-    # if args.whiten:
-    #     X_train = X_train[:, :, 1:] - X_train[:, :, :-1]
+    if whiten:
+        X_train = X_train[:, :, 1:] - X_train[:, :, :-1]
 
     # cross-correlation of abp with each of the other variables
     print("Doing cross correl")
@@ -77,6 +77,7 @@ def do_design(X_train, num_channels, channels):
                 corr = np.correlate(x - x.mean(), y - y.mean(), mode="full")
                 corr /= np.std(x) * np.std(y) * X.shape[-1]
                 assert corr.shape[0] == 2 * X.shape[-1] - 1
+                assert len(corr.shape) == 1
 
                 # corr will be of length 2 * timepoints - 1
                 # we want to extract all correlations for +/- (timepoints/60 - 1) minutes
@@ -84,7 +85,17 @@ def do_design(X_train, num_channels, channels):
                 relevant_corr = np.concat(
                     [corr[mid::-60][::-1], corr[mid + 60 :: 60][:-1]]
                 )
-                assert relevant_corr.shape[0] == 38
+                if whiten:
+                    assert relevant_corr.shape[0] == ((len(x) + 1) // 60) * 2 - 2
+                else:
+                    assert relevant_corr.shape[0] == ((len(x)) // 60) * 2 - 2
+                if np.isnan(relevant_corr).any():
+                    # print("NA correlations, setting to zero")
+                    # print(c)
+                    # print("X", (x - x.mean()).mean(), np.std(x))
+                    # print("y", (y - y.mean()).mean(), np.std(y))
+
+                    relevant_corr = np.nan_to_num(relevant_corr)
 
                 channel_corrs.append(relevant_corr)
         rows.append(np.concatenate(channel_corrs))
@@ -125,6 +136,10 @@ if __name__ == "__main__":
     random.seed(420)
     pd.options.display.float_format = "{:.2f}".format
 
+    if "w_60s" in os.path.basename(args.train_dir) or "freq" in os.path.basename(args.train_dir):
+        print("Skipping design_feat.py because window too small (i.e., 60s) or frequency not 60.")
+        sys.exit(0)
+
     # parse the save directory to get the information of interest
     train_dir_name = os.path.basename(args.train_dir.rstrip("/"))
     train_params = train_dir_name.split("_")
@@ -151,8 +166,8 @@ if __name__ == "__main__":
     X_train = da.from_zarr(os.path.join(args.train_dir, "permanent", "train", "x.zarr"))
     X_test = da.from_zarr(os.path.join(args.train_dir, "permanent", "test", "x.zarr"))
 
-    dfeat = do_design(X_train, num_channels, channels)
-    dfeat_test = do_design(X_test, num_channels, channels)
+    dfeat = do_design(X_train, num_channels, channels, args.whiten)
+    dfeat_test = do_design(X_test, num_channels, channels, args.whiten)
     print(f"Final array has shape {dfeat.shape}")
     print(f"Final test array has shape {dfeat_test.shape}")
     print("Mean:", dfeat.mean().compute())
@@ -168,13 +183,16 @@ if __name__ == "__main__":
         for split in ["train", "test"]:
             permanent_path = os.path.join(args.train_dir, "permanent", split)
             for f in os.listdir(permanent_path):
-                if "design" in f:
+                if f == "white_design" in f:
                     shutil.rmtree(os.path.join(permanent_path, f))
+                elif "design" in f and not args.whiten:
+                    shutil.rmtree(os.path.join(permanent_path, f))
+        name = "white_design_x.zarr" if args.whiten else "design_x.zarr"
         da.to_zarr(
             dfeat,
-            url=os.path.join(args.train_dir, "permanent", "train", f"design_x.zarr"),
+            url=os.path.join(args.train_dir, "permanent", "train", name),
         )
         da.to_zarr(
             dfeat_test,
-            url=os.path.join(args.train_dir, "permanent", "test", f"design_x.zarr"),
+            url=os.path.join(args.train_dir, "permanent", "test", name),
         )

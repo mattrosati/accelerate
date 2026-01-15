@@ -64,7 +64,7 @@ def load_label(patient_id, labels_path, time="us"):
     return df
 
 
-def find_time_elapsed(ptid, calc, path, start_time, time):
+def find_time_elapsed(ptid, calc, path, start_time, time, end_time=-1):
 
     df = load_label(ptid, labels_path=path, time=time)
 
@@ -74,11 +74,14 @@ def find_time_elapsed(ptid, calc, path, start_time, time):
     df.set_index(df[f"elapsed_{time}"], inplace=True)
 
     try:
-        time = df[calc][df[calc].notna().all(axis=1)].index[0]
-        if time < 0:
+        s = df[calc][df[calc].notna().all(axis=1)].index[0]
+        if s < 0:
             print(f"neg time {ptid}, returning 0.")
-            return time - time
-        return time
+            return 0.0
+        if start_time + s >= end_time:
+            print(f"First calc after end time for {ptid}")
+            return None
+        return s
     except:
         print(f"No time found for {ptid}")
         return None

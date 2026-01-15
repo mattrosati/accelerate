@@ -19,9 +19,11 @@ warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning
 
 def train_cv(config, X, y, folds, estimator, scoring):
 
-    model = estimator.set_params(**config)
     summary = {}
     metrics = {}
+
+    base = clone(estimator).set_params(**config)
+
     if not isinstance(y, np.ndarray):
         y = y.to_numpy()
     # Loop over all repeated CV folds
@@ -30,10 +32,11 @@ def train_cv(config, X, y, folds, estimator, scoring):
         X_tr, X_val = X[train_idx], X[val_idx]
         y_tr, y_val = y[train_idx], y[val_idx]
 
+        model = clone(base)  # fresh model per fold
         model.fit(X_tr, y_tr)
 
-        scores_train = scoring(estimator, X_tr, y_tr)
-        scores_val = scoring(estimator, X_val, y_val)
+        scores_train = scoring(model, X_tr, y_tr)
+        scores_val = scoring(model, X_val, y_val)
 
         if fold_idx == 0:
             for key in scores_train.keys():
@@ -129,7 +132,7 @@ class RayAdaptiveRepeatedCVSearch:
 
         for r in range(n_repeats):
             sgkf = StratifiedGroupKFold(
-                n_splits=n_splits, shuffle=True, random_state=random_state
+                n_splits=n_splits, shuffle=True, random_state=random_state + r
             )
             for train_idx, val_idx in sgkf.split(X, y, groups):
                 yield train_idx, val_idx

@@ -34,7 +34,7 @@ from sklearn.preprocessing import PowerTransformer
 def normalize(
     save_dir,
     variables,
-    img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize_impute_rs",
+    img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize_impute_rs_new",
     graph=False,
     scaler=None,
 ):
@@ -413,7 +413,7 @@ if __name__ == "__main__":
         default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/processed/all_data.hdf5",
     )
     parser.add_argument(
-        "--save_dir",
+        "--top_dir",
         help="Directory to save extracted data.",
         default="/home/mr2238/project_pi_np442/mr2238/accelerate/data/training",
     )
@@ -500,6 +500,12 @@ if __name__ == "__main__":
         default=-1e2,
         help="Minimum R2 value for labels to be considered good.",
     )
+    # parser.add_argument(
+    #     "--stride",
+    #     "-z",
+    #     help="Non-overlapping windows.",
+    #     action="store_true",
+    # )
 
     args = parser.parse_args()
     config = args
@@ -522,14 +528,14 @@ if __name__ == "__main__":
         dataset_name = f"freq{args.frequency}_" + dataset_name
     if args.r2_threshold > 0.0:
         dataset_name = f"{args.r2_threshold:.2f}r2_" + dataset_name
-    print(f"DATASET = {os.path.join(args.save_dir, dataset_name)}")
+    print(f"DATASET = {os.path.join(args.top_dir, dataset_name)}")
 
     print(
         f"Dataset creation with window size {args.window_size}s for variables: {args.variables}."
     )
 
     # make test, train and temp directories, prepare for saving
-    save_dir = os.path.join(args.save_dir, dataset_name, "train_data")
+    save_dir = os.path.join(args.top_dir, dataset_name, "train_data")
     # overwrite save dir if it exists
     if os.path.exists(save_dir):
         print("Overwriting existing save directory.")
@@ -715,19 +721,19 @@ if __name__ == "__main__":
             # print(z.mean().compute())
 
     if (
-        os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent"))
+        os.path.exists(os.path.join(args.top_dir, dataset_name, "permanent"))
         and not args.overwrite_permanent
     ):
         print(
             "WARNING: not overwriting permanent to avoid data chaos, current run in train_data. The latter will get overwritten if run again"
         )
-    elif not os.path.exists(os.path.join(args.save_dir, dataset_name, "permanent")):
-        shutil.move(save_dir, os.path.join(args.save_dir, dataset_name, "permanent"))
+    elif not os.path.exists(os.path.join(args.top_dir, dataset_name, "permanent")):
+        shutil.move(save_dir, os.path.join(args.top_dir, dataset_name, "permanent"))
     else:
         # if overwriting, check if file names are same (then delete old and overwrite) or different (then just add new)
         for split in ["train", "test"]:
             permanent_path = os.path.join(
-                args.save_dir, dataset_name, "permanent", split
+                args.top_dir, dataset_name, "permanent", split
             )
             new_path = os.path.join(save_dir, split)
             for f in os.listdir(new_path):
@@ -737,12 +743,20 @@ if __name__ == "__main__":
                     else:
                         os.remove(os.path.join(permanent_path, f))
                 shutil.move(os.path.join(new_path, f), os.path.join(permanent_path, f))
+        
+        # overwrite scalers
+        perm_scalers = os.path.join(args.top_dir, dataset_name, "permanent", "scalers")
+        shutil.rmtree(perm_scalers)
+        shutil.move(os.path.join(save_dir, "scalers"), perm_scalers)
+
+        # delete copying dir once done overwriting
+        shutil.rmtree(save_dir)
 
     X_train = da.from_zarr(
-        os.path.join(args.save_dir, dataset_name, "permanent", "train", "x.zarr")
+        os.path.join(args.top_dir, dataset_name, "permanent", "train", "x.zarr")
     )
     labels = pd.read_pickle(
-        os.path.join(args.save_dir, dataset_name, "permanent", "train", "labels.pkl")
+        os.path.join(args.top_dir, dataset_name, "permanent", "train", "labels.pkl")
     )
     assert X_train.shape[0] == labels.shape[0]
     y_train = labels["in?"].astype(int)
@@ -753,6 +767,6 @@ if __name__ == "__main__":
         f"{y_train.sum() / y_train.shape[0] * 100:0.1f}% of training windows are inside AR limits for mode {args.mode}."
     )
     print("Dataset creation complete.")
-    print(f"DATASET_NAME={os.path.join(args.save_dir, dataset_name)}")
+    print(f"DATASET_NAME={os.path.join(args.top_dir, dataset_name)}")
     print(f"Random seed {np.random.default_rng().integers(0, 1e6)}")
     print("")

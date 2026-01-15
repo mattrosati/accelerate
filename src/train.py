@@ -24,11 +24,13 @@ import dask.array as da
 
 from sklearn import svm
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline
 from sklearn.model_selection import (
     RandomizedSearchCV,
     RepeatedStratifiedKFold,
     StratifiedGroupKFold,
 )
+from sklearn.feature_selection import SelectPercentile, mutual_info_classif
 from sklearn.metrics import (
     balanced_accuracy_score,
     auc,
@@ -42,6 +44,7 @@ from sklearn.ensemble import RandomForestClassifier
 from dask_ml.model_selection import HyperbandSearchCV
 
 from ray import tune
+from ray import init
 
 import xgboost as xgb
 
@@ -81,8 +84,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_mode",
         type=str,
-        choices=["raw", "pca", "fpca", "separate_pca", "chronos"],
-        help="Transofrmations applied to mode prior to loading.",
+        choices=["raw", "pca", "fpca", "separate_pca", "chronos", "design", "design_w"],
+        help="Transformations applied to mode prior to loading.",
         default="raw",
     )
     parser.add_argument(
@@ -90,6 +93,12 @@ if __name__ == "__main__":
         "--debug",
         action="store_true",
         help="Trains on smaller subset of data. Saves models separately.",
+    )
+    parser.add_argument(
+        "-sv",
+        "--select_var",
+        action="store_true",
+        help="Selects variables based on pointwise mutual info.",
     )
     parser.add_argument(
         "--run_name",
@@ -101,6 +110,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     np.random.seed(420)
     random.seed(420)
+
+    # if train_dir contains var and params contains raw, design, or chronos, skip python run
+    if "var" in os.path.basename(os.path.normpath(args.train_dir)) and args.data_mode in ["raw", "design", "chronos", "design_w"]:
+        print(f"Skipping: TRAIN_DIR contains 'var' and PARAMS contains '{args.data_mode}'")
+        sys.exit(0)
+    # if train_dir contains freq and params contains raw, skip python run
+    elif "freq" in os.path.basename(os.path.normpath(args.train_dir)) and "design" in args.data_mode:
+        print("Skipping: TRAIN_DIR contains 'freq' and PARAMS contains 'design'.")
+        sys.exit(0)
 
     print(f"Training model {args.model} with {args.data_mode} embeddings.")
 
@@ -117,6 +135,8 @@ if __name__ == "__main__":
         f = "chronos_x.zarr"
     elif args.data_mode == "design":
         f = "design_x.zarr"
+    elif args.data_mode == "design_w":
+        f = "white_design_x.zarr"
     X_train = da.from_zarr(os.path.join(args.train_dir, "permanent", "train", f))
     labels = pd.read_pickle(
         os.path.join(args.train_dir, "permanent", "train", "labels.pkl")
@@ -124,17 +144,33 @@ if __name__ == "__main__":
     y_train = labels["in?"].astype(int)
     groups = labels["ptid"].astype(str)
 
+    init(_temp_dir=os.environ["RAY_TMPDIR"], include_dashboard=False)
+
     # shuffle and index if debugging
     if args.debug:
+        print(f"Training dataset shape: {X_train.shape}.")
         print("Using a smaller dataset size to be speedy.")
-        length = 10_000
+        # this should fucking be a stratified k fold thing
+        length = 20_000
+
+        # len(X) // 10_000 = num_splits, every split will be approximately length large
 
         n = X_train.shape[0]
-        perm = np.random.permutation(n)[:length]  # 1D dask array of indices
-        X_train = X_train[perm]
-        y_train = y_train[perm]
-        groups = groups[perm]
-        print(f"Training dataset shape: {X_train.shape}.")
+
+        n_splits = n // length
+        if n_splits > 1:
+            cv = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=42)
+            train_idx, test_idx = next(cv.split(X=X_train, y=y_train, groups=groups))
+            X_train = X_train[test_idx]
+            y_train = y_train[test_idx]
+            groups = groups[test_idx]
+
+        # perm = np.random.permutation(n)[:length]  # 1D dask array of indices
+        # X_train = X_train[perm]
+        # y_train = y_train[perm]
+        # groups = groups[perm]
+        print(f"Training on {len(np.unique(groups))} patients")
+        print(f"Smaller dataset shape: {X_train.shape}.")
 
     # make model saving dir, timestamped or run_name
     if args.run_name == "":
@@ -181,7 +217,7 @@ if __name__ == "__main__":
         model = svm.SVC()
         params = {
             "C": tune.loguniform(0.001, 100),
-            "gamma": tune.loguniform(1 / (X_train.shape[1] ** 3), 0.01),
+            "gamma": tune.loguniform(1e-3, 1e1),
         }
     elif args.model == "knn":
         model = KNeighborsClassifier(n_jobs=1)
@@ -192,7 +228,7 @@ if __name__ == "__main__":
     elif args.model == "rand_forest":
         model = RandomForestClassifier()
         params = {
-            "n_estimators": tune.lograndint(50, 0.005 * X_train.shape[0]),
+            "n_estimators": tune.lograndint(10, 150),
             "max_depth": tune.qrandint(5, 30, 5),
             "max_features": tune.choice([0.005, 0.02, 0.05, "sqrt"]),
             "min_samples_split": tune.randint(15, 100),
@@ -203,9 +239,9 @@ if __name__ == "__main__":
     elif args.model == "xgb":
         model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
         params = {
-            "n_estimators": tune.lograndint(50, 0.005 * X_train.shape[0]),
+            "n_estimators": tune.lograndint(10, 150),
             "max_depth": tune.randint(2, 10),
-            "learning_rate": tune.loguniform(1e-3, 1e-1),
+            "learning_rate": tune.loguniform(1e-3, 1.0),
             "subsample": tune.quniform(0.5, 0.9, 0.05),
             "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
             "gamma": tune.quniform(0.5, 10, 0.25),
@@ -241,7 +277,7 @@ if __name__ == "__main__":
         if args.model == "rand_forest":
             model = RandomForestClassifier()
             params = {
-                "n_estimators": tune.lograndint(10, 40),
+                "n_estimators": tune.lograndint(5, 150),
                 "max_depth": tune.qrandint(5, 20, 5),
                 "max_features": tune.choice([0.005, 0.02, 0.05]),
                 "min_samples_split": tune.randint(30, 200),
@@ -274,6 +310,16 @@ if __name__ == "__main__":
             }
             model = MultiRocketClassifier(estimator=RidgeClassifier())
 
+    if args.select_var:
+        print("Selecting variables based on PMI")
+        fs = SelectPercentile(score_func=mutual_info_classif)
+        params = {f"m__{k}": v for k, v in params.items()}
+        params["pmi__percentile"] = tune.qrandint(10, 60, 10)
+        model = Pipeline(steps=[('pmi',fs), ('m', model)])
+        n_iter += 5
+
+    model_name = f"{args.model}{'+sv' if args.select_var else ''}_{args.data_mode}"
+    print(f"Model name: {model_name}")
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
@@ -282,7 +328,7 @@ if __name__ == "__main__":
         rank_metric="mean_val_auc",
         cv=[5, 3],  # repeats five folds 3 times
         store_path=model_store,
-        model_name=f"{args.model}_{args.data_mode}",
+        model_name=model_name,
     )
     X_train = X_train.compute()
 
@@ -320,14 +366,14 @@ if __name__ == "__main__":
     # save model
     dump(
         search.best_estimator_,
-        open(os.path.join(model_store, f"{args.model}_{args.data_mode}.pkl"), "wb"),
+        open(os.path.join(model_store, f"{model_name}.pkl"), "wb"),
     )
 
     # compute confusion matrix and save
     # get new train val split
     print("Making confusion matrices on a fresh split.")
     conf_train_idx, conf_val_idx = next(
-        StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42).split(
+        StratifiedGroupKFold(n_splits=2, shuffle=True, random_state=42).split(
             X_train, y_train, groups
         )
     )
@@ -345,7 +391,7 @@ if __name__ == "__main__":
     dump(
         conf_mat,
         open(
-            os.path.join(model_store, f"{args.model}_{args.data_mode}_confmat.pkl"),
+            os.path.join(model_store, f"{model_name}_confmat.pkl"),
             "wb",
         ),
     )
