@@ -1,26 +1,52 @@
 -d --model log_reg --data_mode chronos
+-d --model log_reg --data_mode chronos -sv
+-d --model log_reg --data_mode design
+-d --model log_reg --data_mode design -sv
+-d --model log_reg --data_mode design_w
+-d --model log_reg --data_mode design_w -sv
 -d --model decision_tree --data_mode chronos
--d --model xgb --data_mode chronos
--d --model knn --data_mode design
+-d --model decision_tree --data_mode chronos -sv
 -d --model decision_tree --data_mode design
--d --model xgb --data_mode design
--d --model rand_forest --data_mode design
--d --model svm --data_mode design
+-d --model decision_tree --data_mode design -sv
+-d --model decision_tree --data_mode design_w
+-d --model decision_tree --data_mode design_w -sv
 -d --model decision_tree --data_mode pca
 -d --model decision_tree --data_mode separate_pca
 -d --model decision_tree --data_mode raw
--d --model svm --data_mode pca
--d --model svm --data_mode separate_pca
+-d --model knn --data_mode chronos
+-d --model knn --data_mode chronos -sv
+-d --model knn --data_mode design
+-d --model knn --data_mode design -sv
+-d --model knn --data_mode design_w
+-d --model knn --data_mode design_w -sv
 -d --model knn --data_mode pca
 -d --model knn --data_mode separate_pca
 -d --model knn --data_mode raw
--d --model rand_forest --data_mode raw
--d --model rand_forest --data_mode separate_pca
--d --model rand_forest --data_mode pca
+-d --model xgb --data_mode chronos
+-d --model xgb --data_mode chronos -sv
+-d --model xgb --data_mode design
+-d --model xgb --data_mode design -sv
+-d --model xgb --data_mode design_w
+-d --model xgb --data_mode design_w -sv
 -d --model xgb --data_mode separate_pca
 -d --model xgb --data_mode pca
 -d --model xgb --data_mode raw
+-d --model rand_forest --data_mode chronos
+-d --model rand_forest --data_mode chronos -sv
+-d --model rand_forest --data_mode design
+-d --model rand_forest --data_mode design -sv
+-d --model rand_forest --data_mode design_w
+-d --model rand_forest --data_mode design_w -sv
+-d --model rand_forest --data_mode raw
+-d --model rand_forest --data_mode separate_pca
+-d --model rand_forest --data_mode pca
+-d --model svm --data_mode chronos
+-d --model svm --data_mode chronos -sv
+-d --model svm --data_mode design
+-d --model svm --data_mode design -sv
+-d --model svm --data_mode design_w
+-d --model svm --data_mode design_w -sv
+-d --model svm --data_mode pca
+-d --model svm --data_mode separate_pca
 -d --model rocket --data_mode raw
 -d --model knn_multivar --data_mode raw
--d --model knn --data_mode chronos
--d --model rand_forest --data_mode chronos

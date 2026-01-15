@@ -16,5 +16,5 @@ cd /home/mr2238/accelerate
 
 set -euo pipefail
 
-python -u src/data_extract.py $PARAMS -t chronos -o --save_dir /home/mr2238/scratch_pi_np442/mr2238/accelerate/total
+python -u src/data_extract.py $PARAMS -t chronos -o --top_dir /home/mr2238/scratch_pi_np442/mr2238/accelerate/total
 

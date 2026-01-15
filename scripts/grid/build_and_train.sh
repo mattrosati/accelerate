@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --array=0,48,575,863                    # Update this range to match the number of runs, 1-26, 28-100, 101-200, 201-400, 401-600, 600-862
+#SBATCH --array=0-100                  # Update this range to match the number of runs, 101-200, 201-400, 401-600, 600-862 (0-100 done)
 #SBATCH --partition=day
-#SBATCH --output="logs/launcher/total_%A_%a.out"
+#SBATCH --output="logs/launcher/total_%a_%A.out"
 #SBATCH --job-name=grid
 #SBATCH --requeue
 #SBATCH --nodes=1
