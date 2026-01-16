@@ -10,6 +10,8 @@ from ray.tune.search import ConcurrencyLimiter
 import optuna
 import warnings
 
+from sklearn.base import clone
+
 # Ray: disable deprecated env override behavior
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
 
@@ -38,30 +40,25 @@ def train_cv(config, X, y, folds, estimator, scoring):
         scores_train = scoring(model, X_tr, y_tr)
         scores_val = scoring(model, X_val, y_val)
 
-        if fold_idx == 0:
-            for key in scores_train.keys():
+        for key in scores_train.keys():
+            if fold_idx == 0:
                 summary[f"train_{key}"] = [scores_train[key]]
                 summary[f"val_{key}"] = [scores_val[key]]
 
-                metrics[f"mean_val_{key}"] = float(np.mean([scores_val[key]]))
-                metrics[f"mean_train_{key}"] = float(np.mean([scores_train[key]]))
-
-                metrics[f"std_val_{key}"] = 0.0
-                metrics[f"std_train_{key}"] = 0.0
-        else:
-            for key in scores_train.keys():
+            else:
                 summary[f"train_{key}"].append(scores_train[key])
                 summary[f"val_{key}"].append(scores_val[key])
 
-                metrics[f"mean_val_{key}"] = float(np.mean([scores_val[key]]))
-                metrics[f"mean_train_{key}"] = float(np.mean([scores_train[key]]))
+            metrics[f"mean_val_{key}"] = float(np.mean(summary[f"val_{key}"]))
+            metrics[f"mean_train_{key}"] = float(np.mean(summary[f"train_{key}"]))
 
-                metrics[f"std_val_{key}"] = float(np.std(summary[f"val_{key}"]))
-                metrics[f"std_train_{key}"] = float(np.std(summary[f"train_{key}"]))
+            metrics[f"std_val_{key}"] = float(np.std(summary[f"val_{key}"]))
+            metrics[f"std_train_{key}"] = float(np.std(summary[f"train_{key}"]))
+            metrics[f"gap_{key}"] = metrics[f"mean_train_{key}"] - metrics[f"mean_val_{key}"]
 
-        fold_summary = metrics | {"fold": fold_idx}
+        metrics["fold"] = fold_idx
 
-        tune.report(metrics=fold_summary)
+        tune.report(metrics)
 
 
 class RayAdaptiveRepeatedCVSearch:
@@ -81,7 +78,7 @@ class RayAdaptiveRepeatedCVSearch:
         estimator,
         search_space,
         cv=None,
-        grace_period=6,
+        grace_period=7,
         reduction_factor=2,
         num_samples=50,
         scoring="roc_auc",

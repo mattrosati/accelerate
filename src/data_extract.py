@@ -36,7 +36,7 @@ def normalize(
     variables,
     img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize_impute_rs_new",
     graph=False,
-    scaler=None,
+    scaler_mode=None,
 ):
     n_samples = 100_000
     os.makedirs(img_dir, exist_ok=True)
@@ -54,7 +54,7 @@ def normalize(
 
         orig_shape = z_arr.shape
         z_arr = z_arr.reshape(-1, 1)
-        if scaler == "robust":
+        if scaler_mode == "robust":
             if v == "spo2":
                 # flip tail
                 z_arr = 100.0 - z_arr
@@ -123,7 +123,7 @@ def normalize(
         orig_shape = z_arr_test.shape
         z_arr_test = z_arr_test.reshape(-1, 1)
 
-        if scaler == "robust":
+        if scaler_mode == "robust":
             if v == "spo2":
                 z_arr_test = 100.0 - z_arr_test
             z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
@@ -196,7 +196,7 @@ def generate_final(save_dir, variables, transform=""):
             else:
                 base = da.concatenate([base, z_arr], axis=-1)
 
-        da.to_zarr(base, url=os.path.join(save_dir, s, f"{transform}x.zarr"))
+        da.to_zarr(base.rechunk({0: 10000, 1: -1}), url=os.path.join(save_dir, s, f"{transform}x.zarr"))
 
     return None
 
@@ -500,12 +500,12 @@ if __name__ == "__main__":
         default=-1e2,
         help="Minimum R2 value for labels to be considered good.",
     )
-    # parser.add_argument(
-    #     "--stride",
-    #     "-z",
-    #     help="Non-overlapping windows.",
-    #     action="store_true",
-    # )
+    parser.add_argument(
+        "--stride",
+        "-z",
+        help="Non-overlapping windows.",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     config = args
@@ -606,7 +606,7 @@ if __name__ == "__main__":
     # preprocess dataset
     # normalize (imputation already done)
     print("Normalizing:")
-    normalize(save_dir, args.variables, scaler=args.scaler)
+    normalize(save_dir, args.variables, scaler_mode=args.scaler)
 
     # generates final base dataset
     print("\nGenerating whole dataset:")
@@ -635,14 +635,14 @@ if __name__ == "__main__":
             )
 
             da.to_zarr(
-                X_train,
+                X_train.rechunk({0: 10000, 1: -1}),
                 url=os.path.join(
                     save_dir, "train", f"separate_decomp_{v}_x_scaled.zarr"
                 ),
                 overwrite=True,
             )
             da.to_zarr(
-                X_test,
+                X_test.rechunk({0: 10000, 1: -1}),
                 url=os.path.join(
                     save_dir, "test", f"separate_decomp_{v}_x_scaled.zarr"
                 ),
@@ -669,8 +669,8 @@ if __name__ == "__main__":
         print(
             f"Train and test datasets generated adequately with combined PCAs. {X_train.shape[0]} windows in train and {X_test.shape[0]} in test with {X_train.shape[1]} dimensions."
         )
-        da.to_zarr(X_train, url=os.path.join(save_dir, "train", f"pca_x.zarr"))
-        da.to_zarr(X_test, url=os.path.join(save_dir, "test", f"pca_x.zarr"))
+        da.to_zarr(X_train.rechunk({0: 10000, 1: -1}), url=os.path.join(save_dir, "train", f"pca_x.zarr"))
+        da.to_zarr(X_test.rechunk({0: 10000, 1: -1}), url=os.path.join(save_dir, "test", f"pca_x.zarr"))
 
         print("Done.")
 

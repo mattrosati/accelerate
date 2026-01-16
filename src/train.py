@@ -5,6 +5,8 @@ from argparse import ArgumentParser
 from pickle import dump
 from datetime import datetime
 import random
+import logging
+import time
 
 import h5py
 
@@ -43,8 +45,8 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from dask_ml.model_selection import HyperbandSearchCV
 
+import ray
 from ray import tune
-from ray import init
 
 import xgboost as xgb
 
@@ -106,6 +108,11 @@ if __name__ == "__main__":
         default="",
         help="Names run, defaults to timestamp if empty.",
     )
+    parser.add_argument(
+        "--log_dir",
+        help="Directory to log ray stuff.",
+        default="/home/mr2238/project_pi_np442/mr2238/tmp",
+    )
 
     args = parser.parse_args()
     np.random.seed(420)
@@ -151,7 +158,9 @@ if __name__ == "__main__":
     y_train = labels["in?"].astype(int)
     groups = labels["ptid"].astype(str)
 
-    init(_temp_dir=os.environ["RAY_TMPDIR"], include_dashboard=False)
+    ray.init(_temp_dir=args.log_dir, include_dashboard=False, logging_level=logging.ERROR)
+    session_dir = ray._private.worker.global_worker.node.get_session_dir_path()
+    print(session_dir)
 
     # shuffle and index if debugging
     if args.debug:
@@ -331,7 +340,7 @@ if __name__ == "__main__":
         estimator=model,
         search_space=params,
         scoring=metrics,
-        num_samples=n_iter,
+        num_samples=3,
         rank_metric="mean_val_auc",
         cv=[5, 3],  # repeats five folds 3 times
         store_path=model_store,
@@ -405,3 +414,7 @@ if __name__ == "__main__":
     conf_mat = confusion_matrix(y_true, y_pred, normalize="all")
     print(conf_mat)
     # print("Could not compute confusion matrix.")
+
+
+    print(f"RAYLOG_DIR={session_dir}")
+        

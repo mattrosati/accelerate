@@ -3,7 +3,7 @@ import random
 
 rng = random.Random(42)
 
-window_size = [60, 300, 900, 1800]
+window_size = [300, 900, 1800]
 variables = ["rso2r rso2l abp", ""]
 downsample = [1, 2]
 variance = [95, 80, 60]
@@ -25,7 +25,7 @@ for w, v, g, x, f, s in product(
 # randomize lines
 rng.shuffle(lines)
 
-with open("/home/mr2238/accelerate/scripts/grid/dataset_array.txt", "w") as f:
+with open("/home/mr2238/accelerate/scripts/grid/dataset_array_stride.txt", "w") as f:
     f.write("\n".join(lines))
 
 print(f"Generated {len(lines)} combinations")
