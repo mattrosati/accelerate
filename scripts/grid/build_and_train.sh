@@ -1,42 +1,40 @@
 #!/bin/bash
-#SBATCH --array=0-100                  # Update this range to match the number of runs, 101-200, 201-400, 401-600, 600-862 (0-100 done)
-#SBATCH --partition=day
-#SBATCH --output="logs/launcher/total_%a_%A.out"
-#SBATCH --job-name=grid
-#SBATCH --requeue
-#SBATCH --nodes=1
-#SBATCH --mem-per-cpu=4G
-#SBATCH --cpus-per-task=1
-#SBATCH --time=01:00:00
-
 set -euo pipefail
 
+# Check if data mode is provided
+if [ -z "$1" ]; then
+  echo "Usage: $0 <general mode of data> <run name>"
+  exit 1
+fi
+# Check if run name is provided
+if [ -z "$2" ]; then
+  echo "Usage: $0 <general mode of data> <run name>"
+  exit 1
+fi
+
+
 date;hostname;pwd
-
-module load miniconda
-conda activate cppopt-dl
-
 cd /home/mr2238/accelerate
 echo "Dataset build and rapid iteration train"
+MODE=$1
+RUN_NAME=$2
 
 LOGROOT="logs"
 mkdir -p "$LOGROOT"
 
 timestamp=$(date +"%Y-%m-%d_%H-%M")
-LOGDIR="$LOGROOT/total"
+LOGDIR="$LOGROOT/$MODE"
 mkdir -p "$LOGDIR"
 
 
 # Select model based on list of args
-PARAM_LIST="/home/mr2238/accelerate/scripts/grid/dataset_array.txt"
-PARAMS=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$PARAM_LIST")
-
-echo "Building with params: $PARAMS"
+PARAM_LIST="/home/mr2238/accelerate/scripts/grid/dataset_array_stride.txt"
 
 #sbatch gpu rebuild
 SUBMIT_OUT=$(sbatch \
-  --export=ALL,PARAMS="$PARAMS" \
-  --output="$LOGDIR/gpu_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out" \
+  --array=0-215 \
+  --export=ALL,PARAM_LIST="$PARAM_LIST",MODE="$MODE" \
+  --output="$LOGDIR/gpu_%A_%a.out" \
   scripts/grid/gpu_rebuild.sh \
 )
 
@@ -49,13 +47,12 @@ JOBID=$(echo "$SUBMIT_OUT" | awk '/Submitted batch job/ {print $4}')
 }
 echo "Submitted gpu rebuild job: $JOBID"
 
-
 # sbatch cpu rebuild and train
-CPU_LOG="$LOGDIR/cpu_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.out"
+CPU_LOG="$LOGDIR/cpu_${JOBID}_%a.out"
 sbatch \
   --dependency=afterok:$JOBID \
-  --export=ALL,PARAMS="$PARAMS",LOGDIR="$LOGDIR",CPU_LOG="$CPU_LOG" \
+  --array=0-215 \
+  --export=ALL,PARAM_LIST="$PARAM_LIST",LOGDIR="$LOGDIR",CPU_LOG="$CPU_LOG",RUN_NAME="$RUN_NAME",MODE="$MODE" \
   --output="$CPU_LOG" \
   scripts/grid/cpu_rebuild.sh
 
-conda deactivate

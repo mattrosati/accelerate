@@ -5,7 +5,7 @@
 #SBATCH --mem-per-cpu=50G 
 #SBATCH --cpus-per-task=10                     
 #SBATCH --time=10:00:00                         # Time limit hrs:min:sec
-#SBATCH --output=logs/rerun_%A.out
+#SBATCH --output=logs/rerun/%A_%a.out
 
 date;hostname;pwd
 
@@ -57,15 +57,27 @@ set -euo pipefail
 # Iterate over dataset dirs in TOTAL_DIR and run command for each
 shopt -s nullglob
 
-for DATASET_DIR in "$TOTAL_DIR"/*; do
-    [[ -d "$DATASET_DIR" ]] || continue
+DATASET_DIRS=( "$TOTAL_DIR"/* )
 
-    echo "Dataset dir: $DATASET_DIR"
+N=${#DATASET_DIRS[@]}
+if [[ "$N" -eq 0 ]]; then
+  echo "No datasets found under TOTAL_DIR=$TOTAL_DIR"
+  exit 1
+fi
 
-    python -u src/design_feat.py -o --train_dir "$DATASET_DIR"
-    python -u src/design_feat.py -o --train_dir "$DATASET_DIR" -w
+# Guard against out-of-range task IDs
+TASK_ID=${SLURM_ARRAY_TASK_ID}
+if (( TASK_ID < 0 || TASK_ID >= N )); then
+  echo "SLURM_ARRAY_TASK_ID=$TASK_ID out of range (0..$((N-1)))"
+  echo "Found N=$N datasets under TOTAL_DIR=$TOTAL_DIR"
+  exit 2
+fi
 
-    bash scripts/rapid_iter_rerun.sh "$DATASET_DIR" 2.0rap
-done
+DATASET_DIR="${DATASET_DIRS[$TASK_ID]}"
+echo "Task ${TASK_ID}/${N}: DATASET_DIR=$DATASET_DIR"
 
+python -u src/design_feat.py -o --train_dir "$DATASET_DIR"
+python -u src/design_feat.py -o --train_dir "$DATASET_DIR" -w
+
+bash scripts/rapid_iter.sh "$DATASET_DIR" 2.0rap
 

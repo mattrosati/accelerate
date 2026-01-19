@@ -1,13 +1,20 @@
 #!/bin/bash
+set -euo pipefail
 
 # Check if path prefix is provided
 if [ -z "$1" ]; then
-  echo "Usage: $0 <hours requested for session>"
+  echo "Usage: $0 <hours requested for session> <gpu or cpu>"
+  exit 1
+fi
+
+if [ -z "$2" ]; then
+  echo "Usage: $0 <hours requested for session> <gpu or cpu>"
   exit 1
 fi
 
 HOURS=$1
-TASK_FILE=${2:-vscode_slurm.sh}
+PARTITION=$2
+TASK_FILE=${3:-vscode_slurm.sh}
 
 TIME_FORMAT=$(printf "%02d:00:00" "$HOURS")
 
@@ -33,8 +40,11 @@ cd accelerate
      echo "$TEMP_TAG"
 } >> "$BASHRC"
 
-
-salloc -t "$TIME_FORMAT" --mem-per-cpu=8G --cpus-per-task=3
+if [[ "$PARTITION" == 'gpu' ]]; then
+  salloc -t "$TIME_FORMAT" --mem-per-cpu=8G --cpus-per-task=3 --partition=gpu_devel --gpus=1
+else
+  salloc -t "$TIME_FORMAT" --mem-per-cpu=8G --cpus-per-task=3
+fi
 
 sed -i "/$TEMP_TAG/,/$TEMP_TAG/d" "$BASHRC"
 echo "Cleaned up .bashrc."

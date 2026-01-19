@@ -16,5 +16,10 @@ cd /home/mr2238/accelerate
 
 set -euo pipefail
 
-python -u src/data_extract.py $PARAMS -t chronos -o --top_dir /home/mr2238/scratch_pi_np442/mr2238/accelerate/total
+PARAMS=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$PARAM_LIST")
+
+echo "GPU building with params: $PARAMS"
+DIR="/home/mr2238/scratch_pi_np442/mr2238/accelerate/${MODE}"
+
+python -u src/data_extract.py -t chronos -o -z --top_dir "$DIR" $PARAMS
 

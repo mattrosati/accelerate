@@ -48,7 +48,7 @@ for SCRIPT in "${SLURM_SCRIPTS[@]}"; do
 
     sbatch \
         --job-name="$jobname" \
-        --export=TRAIN_DIR="$TRAIN_DIR",RUN_NAME="$RUN_NAME" \
+        --export=TRAIN_DIR="$TRAIN_DIR",RUN_NAME="$RUN_NAME",LOGDIR="$LOGDIR",jobname="$jobname" \
         --output="$LOGDIR/${jobname}_%A_%a.out" \
         "$SCRIPT"
 done
