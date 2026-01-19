@@ -15,7 +15,7 @@ import seaborn as sns
 from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 
 import zarr
@@ -25,10 +25,37 @@ from data_utils import build_continuous_time, load_label
 from constants import *
 from process_utils import *
 
-from dask_ml.preprocessing import StandardScaler, RobustScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from dask_ml.decomposition import PCA
+from sklearn.decomposition import PCA as skPCA
 
 from sklearn.preprocessing import PowerTransformer
+
+import multiprocessing as mp
+
+
+def do_tests(X):
+    # Check non-finite counts
+    n_nan = da.isnan(X).sum()
+    n_inf = da.isinf(X).sum()
+    mx = da.nanmax(da.abs(X))
+
+    print("nan:", n_nan.compute())
+    print("inf:", n_inf.compute())
+    print("max|x|:", mx.compute())
+
+    # Check for all-NaN rows or columns
+    all_nan_rows = da.isnan(X).all(axis=1).sum()
+    all_nan_cols = da.isnan(X).all(axis=0).sum()
+    print("all-NaN rows:", all_nan_rows.compute())
+    print("all-NaN cols:", all_nan_cols.compute())
+
+    # Check for zero-variance columns (after ignoring NaNs)
+    col_var = da.nanvar(X, axis=0)
+    n_zero_var = (col_var == 0).sum()
+    print("zero-var cols:", n_zero_var.compute())
+
+    return
 
 
 def normalize(
@@ -47,44 +74,84 @@ def normalize(
 
         # find the scales
         z_arr = z_arr.rechunk({1: z_arr.shape[1]})
-        if graph:
-            sampled_data_pre = da.random.choice(
-                da.ravel(z_arr), size=n_samples, replace=False
-            ).compute()
 
         orig_shape = z_arr.shape
-        z_arr = z_arr.reshape(-1, 1)
+        z_arr = z_arr.reshape(-1, 1).compute()
+
         if scaler_mode == "robust":
             if v == "spo2":
                 # flip tail
                 z_arr = 100.0 - z_arr
             scaler = RobustScaler(quantile_range=(10.0, 90.0))
             scaled_values = scaler.fit_transform(z_arr)
+
         else:
             if v == "spo2":
                 # flip tail, then box cox normalization
                 scaler = PowerTransformer()
                 z_arr = 100.0 - z_arr
 
-                scaled_values = scaler.fit_transform(z_arr.compute())
-                scaled_values = da.from_array(scaled_values).rechunk(
-                    {1: scaled_values.shape[1]}
-                )
+                scaled_values = scaler.fit_transform(z_arr)
             else:
                 # for others, do classic normalization
                 scaler = StandardScaler()
                 scaled_values = scaler.fit_transform(z_arr)
 
         scaled_values = scaled_values.reshape(orig_shape)
+
         dump(scaler, open(scaler_store, "wb"))
+        scaled_values = da.from_array(scaled_values)
+
+        # impute everything for train
+        scaled_values = da.map_blocks(
+            lambda block: np.apply_along_axis(impute, axis=1, arr=block),
+            scaled_values,
+            dtype=scaled_values.dtype,
+        )
+        assert not da.isnan(scaled_values).any().compute()
+        t_scaled_values = scaled_values
         da.to_zarr(
             scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr")
         )
 
+        # transform test set
+        z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
+        z_arr_test = da.from_zarr(z_arr_store_test)
+        orig_shape = z_arr_test.shape
+        z_arr_test = z_arr_test.reshape(-1, 1).compute()
+
+        if scaler_mode == "robust":
+            if v == "spo2":
+                z_arr_test = 100.0 - z_arr_test
+            scaled_values = scaler.transform(z_arr_test)
+        else:
+            if v == "spo2":
+                z_arr_test = 100.0 - z_arr_test
+                scaled_values = scaler.transform(z_arr_test)
+            else:
+                scaled_values = scaler.transform(z_arr_test)
+
+        scaled_values = scaled_values.reshape(orig_shape)
+        scaled_values = da.from_array(scaled_values)
+
+        # impute everything for test
+        scaled_values = da.map_blocks(
+            lambda block: np.apply_along_axis(impute, axis=1, arr=block),
+            scaled_values,
+            dtype=scaled_values.dtype,
+        )
+        assert not da.isnan(scaled_values).any().compute()
+        da.to_zarr(
+            scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
+        )
+
         # graph effect of norm
         if graph:
+            sampled_data_pre = da.random.choice(
+                da.ravel(z_arr), size=n_samples, replace=False
+            ).compute()
             sampled_data_post = da.random.choice(
-                da.ravel(scaled_values), size=n_samples, replace=False
+                da.ravel(t_scaled_values), size=n_samples, replace=False
             ).compute()
 
             fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
@@ -117,34 +184,9 @@ def normalize(
             plt.savefig(os.path.join(img_dir, img_name))
             plt.close()
 
-        # transform test set
-        z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
-        z_arr_test = da.from_zarr(z_arr_store_test)
-        orig_shape = z_arr_test.shape
-        z_arr_test = z_arr_test.reshape(-1, 1)
-
-        if scaler_mode == "robust":
-            if v == "spo2":
-                z_arr_test = 100.0 - z_arr_test
-            z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
-            scaled_values = scaler.transform(z_arr_test)
-        else:
-            if v == "spo2":
-                z_arr_test = 100.0 - z_arr_test
-                scaled_values = scaler.transform(z_arr_test.compute())
-                scaled_values = da.from_array(scaled_values).rechunk(
-                    {1: scaled_values.shape[1]}
-                )
-            else:
-                z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
-                scaled_values = scaler.transform(z_arr_test)
-        scaled_values = scaled_values.reshape(orig_shape)
-        da.to_zarr(
-            scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
-        )
-
-        # graph effect of norm
-        if graph:
+            sampled_data_pre = da.random.choice(
+                da.ravel(z_arr_test), size=n_samples, replace=False
+            ).compute()
             sampled_data_post = da.random.choice(
                 da.ravel(scaled_values), size=n_samples, replace=False
             ).compute()
@@ -191,12 +233,16 @@ def generate_final(save_dir, variables, transform=""):
             z_arr_store = os.path.join(save_dir, s, f"{transform}{v}_x_scaled.zarr")
             z_arr = da.from_zarr(z_arr_store)
 
+            # concatenate
             if i == 0:
                 base = z_arr
             else:
                 base = da.concatenate([base, z_arr], axis=-1)
 
-        da.to_zarr(base.rechunk({0: 10000, 1: -1}), url=os.path.join(save_dir, s, f"{transform}x.zarr"))
+        da.to_zarr(
+            base.rechunk({0: 10000, 1: -1}),
+            url=os.path.join(save_dir, s, f"{transform}x.zarr"),
+        )
 
     return None
 
@@ -212,7 +258,9 @@ def intersection_windows(variables, split_dict, temp_dir):
                 if i == 0:
                     combined = labels
                 else:
-                    combined = combined.merge(labels, how="inner", on="datetime")
+                    combined = combined.merge(
+                        labels, how="inner", on="datetime", validate="one_to_one"
+                    )
 
             # save combined
             combined.to_pickle(os.path.join(temp_dir, f"{p}_combined_labels.pkl"))
@@ -269,6 +317,19 @@ def extract_data(ptid, v, temp_dir_path, config):
     w_vectors = np.stack([k["w"] for k in windows], axis=0)
 
     assert w_vectors.shape[0] == in_out.shape[0]
+
+    # will filter out overlapping windows if stride functionality desired
+    stride = config.stride
+    if stride:
+        # print(f"prior to striding, {len(in_out)} windows")
+        in_out, w_vectors = stride_filter(
+            labels=in_out, df=w_vectors, window_s=window_s
+        )
+
+        if len(in_out) <= 0:
+            print(f"No labels with striding in {ptid} and var {v}")
+        # print(f"after striding, {len(in_out)} windows")
+
     # save to a temp file as a zarr array
     temp_dir_path = os.path.join(temp_dir_path, ptid)
     os.makedirs(temp_dir_path, exist_ok=True)
@@ -348,6 +409,7 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
             zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
             z_arr = da.from_zarr(zarr_all_store)
             print(f"Downsampling variable {v} in split {s}, shape is {z_arr.shape}.")
+
             if z_arr.shape[1] != min_points:
                 time_grid_mult = z_arr.shape[1] // min_points
                 if strategy == "mean":
@@ -387,20 +449,40 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
 def do_pca(save_dir, z_arr_train, z_arr_test, variance=0.95):
     z_arr_train = z_arr_train.rechunk({1: z_arr_train.shape[1]})
     z_arr_test = z_arr_test.rechunk({1: z_arr_test.shape[1]})
-    n_dim = np.min([z_arr_train.shape[0], z_arr_train.shape[1], 5_000])
+    skinny_long = z_arr_train.shape[0] > z_arr_train.shape[1]
 
-    col_var = z_arr_train.var(axis=0).compute()
-    pca = PCA(n_components=n_dim)
+    if not skinny_long:
+        pca = skPCA(n_components=variance)
+        z_arr_train = z_arr_train.compute()
+        z_arr_test = z_arr_test.compute()
+    else:
+        n_dim = np.min([z_arr_train.shape[0] - 1, z_arr_train.shape[1], 5_000])
+
+        col_var = z_arr_train.var(axis=0).compute()
+        print("- Num components fit:", n_dim)
+        pca = PCA(n_components=n_dim)
+
     pca = pca.fit(z_arr_train)
     print("- Max var in PCA:", pca.explained_variance_ratio_.cumsum()[-1])
-    selected_dim = (
-        np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > variance][0] + 1
-    )
-    print(
-        f"- Using {selected_dim} dimensions at threshold variance of {variance*100:0.0f}%."
-    )
-    X_train = pca.transform(z_arr_train)[:, :selected_dim]
-    X_test = pca.transform(z_arr_test)[:, :selected_dim]
+
+    if not skinny_long:
+        X_train = pca.transform(z_arr_train)
+        X_test = pca.transform(z_arr_test)
+        print(
+            f"- Not skinny long matrix, using {X_train.shape[1]} dims for target variance {variance*100:0.0f}%."
+        )
+        X_train = da.from_array(X_train)
+        X_test = da.from_array(X_test)
+    else:
+        selected_dim = (
+            np.arange(n_dim)[pca.explained_variance_ratio_.cumsum() > variance][0] + 1
+        )
+        print(
+            f"- Using {selected_dim} dimensions at threshold variance of {variance*100:0.0f}%."
+        )
+        X_train = pca.transform(z_arr_train)[:, :selected_dim]
+        X_test = pca.transform(z_arr_test)[:, :selected_dim]
+
     return X_train, X_test
 
 
@@ -563,6 +645,7 @@ if __name__ == "__main__":
                 split_dict["test"].append(p)
 
     # will do everything and write to file in temp_dir
+    ctx = mp.get_context("spawn")
     for var in args.variables:
         print(f"Extracting for variable {var}:")
         os.makedirs(os.path.join(temp_dir, var))
@@ -572,8 +655,12 @@ if __name__ == "__main__":
             temp_dir_path=os.path.join(temp_dir, var),
             config=config,
         )
+
         results = process_map(
-            func, ptids, max_workers=1 if args.debug else os.cpu_count(), chunksize=1
+            func,
+            ptids,
+            max_workers=1 if args.debug else os.cpu_count(),
+            chunksize=1,
         )
 
         # remove invalid patients from split dict
@@ -618,6 +705,10 @@ if __name__ == "__main__":
     print(
         f"Train and test datasets generated adequately. {base_arr_train.shape[0]} windows in train and {base_arr_test.shape[0]} in test with {base_arr_train.shape[1]} dimensions."
     )
+    print("Checking train dataset for problems:")
+    do_tests(base_arr_train)
+    print("Checking test dataset for problems:")
+    do_tests(base_arr_test)
 
     # basically adds itself between scaling and concatenation
     if "separate_pca" in args.transforms:
@@ -669,8 +760,14 @@ if __name__ == "__main__":
         print(
             f"Train and test datasets generated adequately with combined PCAs. {X_train.shape[0]} windows in train and {X_test.shape[0]} in test with {X_train.shape[1]} dimensions."
         )
-        da.to_zarr(X_train.rechunk({0: 10000, 1: -1}), url=os.path.join(save_dir, "train", f"pca_x.zarr"))
-        da.to_zarr(X_test.rechunk({0: 10000, 1: -1}), url=os.path.join(save_dir, "test", f"pca_x.zarr"))
+        da.to_zarr(
+            X_train.rechunk({0: 10000, 1: -1}),
+            url=os.path.join(save_dir, "train", f"pca_x.zarr"),
+        )
+        da.to_zarr(
+            X_test.rechunk({0: 10000, 1: -1}),
+            url=os.path.join(save_dir, "test", f"pca_x.zarr"),
+        )
 
         print("Done.")
 
@@ -701,7 +798,6 @@ if __name__ == "__main__":
                 shape=(s.shape[0], pipeline.model.model_dim),
                 dtype="float32",
             )
-            print(z.shape)
 
             n_batches = s.shape[0] // batch_size + 1
             for i in tqdm(range(n_batches)):

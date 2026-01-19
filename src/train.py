@@ -166,7 +166,7 @@ if __name__ == "__main__":
     if args.debug:
         print(f"Training dataset shape: {X_train.shape}.")
         print("Using a smaller dataset size to be speedy.")
-        # this should fucking be a stratified k fold thing
+        # this should be a stratified k fold thing
         length = 20_000
 
         # len(X) // 10_000 = num_splits, every split will be approximately length large
@@ -340,7 +340,7 @@ if __name__ == "__main__":
         estimator=model,
         search_space=params,
         scoring=metrics,
-        num_samples=3,
+        num_samples=n_iter,
         rank_metric="mean_val_auc",
         cv=[5, 3],  # repeats five folds 3 times
         store_path=model_store,

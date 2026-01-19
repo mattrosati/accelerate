@@ -18,6 +18,42 @@ def robust_ceil(x, tol=1e-5):
     return np.ceil(x - tol)
 
 
+
+def stride_filter(labels, df, window_s):
+    # **NEW: SUBSAMPLE LABELS TO GET NONOVERLAPPING WINDOWS**
+    # Labels are typically every 60 seconds (1 minute)
+    # If window_s = 300, we want labels every 300 seconds (5 minutes)
+
+    labels = labels.sort_values('datetime').reset_index(drop=True)
+
+    # Keep only labels that are at least window_s apart
+    window_us = window_s * 1e6  # Convert seconds to microseconds
+
+    keep_indices = []
+    if len(labels) > 0:
+        keep_indices.append(0)  # Always keep first label
+        last_kept_time = labels.datetime.iloc[0]
+
+        for i in range(1, len(labels)):
+            current_time = labels.datetime.iloc[i]
+
+            # Only keep if at least window_s has elapsed since last kept window
+            if current_time - last_kept_time > window_us:
+                keep_indices.append(i)
+                last_kept_time = current_time
+
+    labels = labels.iloc[keep_indices].reset_index(drop=True)
+    df = df[keep_indices]
+
+    if len(labels) <= 0:
+        print(f"No labels with striding in {ptid} and var {v}")
+
+    # verify non-overlapping by ensuring difference between filtered datetimes is always >= window_length
+    assert (labels.datetime - labels.datetime.shift(1, fill_value=0) > window_us).all()
+
+    return labels, df
+
+
 def merge_quality_intervals(valid_df, bad_df):
 
     bad_df = bad_df.copy()
@@ -256,17 +292,24 @@ def extract_proportions_count(windows, labels, percentage=0.5):
     return in_out
 
 
-def impute(window, strategy="lin_interpolate"):
+def filter_na(window):
     # imputes missing values given a window according to the specified strategy
     if PERCENT_NA_MAX == 1:
         return window
     if np.isnan(window).sum() / len(window) > PERCENT_NA_MAX:
         # print("WARNING: large amount of Nas in window.")
         return None
+    return window
+
+def impute(window, strategy="lin_interpolate"):
+    # imputes missing values given a window according to the specified strategy
+    # window = window.compute()
     if strategy == "lin_interpolate":
         x_coords = np.arange(len(window))
         w_vals = window[~np.isnan(window)]
         if len(w_vals) == 0:
+            print(len(window), print(len(w_vals), print(window[np.isnan(window)])))
+            print("This should never happen")
             print("Window completely NaN, cannot impute.")
             return None
         window = np.interp(x=x_coords, xp=x_coords[~np.isnan(window)], fp=w_vals)
@@ -377,7 +420,6 @@ def get_windows_var(v, ptid, window_index, window_s, config):
     file_path = config.data_file
     strategy = config.strategy
     percentage = config.percentage
-    stride = config.stride
 
     with h5py.File(file_path, "r") as f:
         # load labels[targets] and var timeseries
@@ -399,33 +441,6 @@ def get_windows_var(v, ptid, window_index, window_s, config):
         assert (labels["DateTime"] > 0).all(), "Non-positive DateTime"
         labels.DateTime = labels.DateTime.astype(np.uint64)
         ts_index = ts_index.astype(np.uint64)
-
-        # **NEW: SUBSAMPLE LABELS TO GET NON-OVERLAPPING WINDOWS**
-        # Labels are typically every 60 seconds (1 minute)
-        # If window_s = 300, we want labels every 300 seconds (5 minutes)
-        if stride:
-            labels = labels.sort_values('DateTime').reset_index(drop=True)
-
-            # Keep only labels that are at least window_s apart
-            window_us = window_s * 1e6  # Convert seconds to microseconds
-
-            keep_indices = []
-            if len(labels) > 0:
-                keep_indices.append(0)  # Always keep first label
-                last_kept_time = labels['DateTime'].iloc[0]
-
-                for i in range(1, len(labels)):
-                    current_time = labels['DateTime'].iloc[i]
-
-                    # Only keep if at least window_s has elapsed since last kept window
-                    if current_time - last_kept_time >= window_us:
-                        keep_indices.append(i)
-                        last_kept_time = current_time
-
-            labels = labels.iloc[keep_indices].reset_index(drop=True)
-
-            if len(labels) <= 0:
-                print(f"No labels with striding in {ptid} and var {v}")
 
         # replace with nan if value is 0 or less (incompatible with life)
         # replace invalid values with nan
@@ -525,7 +540,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
             # extract window data: impute
             windows = [
                 {
-                    "w": impute(ts[i[0] : i[1]]),
+                    "w": filter_na(ts[i[0] : i[1]]),
                     "overlap_len": i[2],
                     "total_length": i[3],
                 }
@@ -542,6 +557,13 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 for i, w in enumerate(windows)
                 if w["w"] is not None
             ]
+            # verify
+            nan_status = np.array([np.isnan(w['w']).all() for w in windows_filtered])
+            if nan_status.any():
+                print("windows with all nans still")
+                print(nan_status)
+                print(ptid)
+
             labels = labels.iloc[
                 [i for i, w in enumerate(windows) if w["w"] is not None]
             ]
