@@ -18,13 +18,12 @@ def robust_ceil(x, tol=1e-5):
     return np.ceil(x - tol)
 
 
-
 def stride_filter(labels, df, window_s):
     # **NEW: SUBSAMPLE LABELS TO GET NONOVERLAPPING WINDOWS**
     # Labels are typically every 60 seconds (1 minute)
     # If window_s = 300, we want labels every 300 seconds (5 minutes)
 
-    labels = labels.sort_values('datetime').reset_index(drop=True)
+    labels = labels.sort_values("datetime").reset_index(drop=True)
 
     # Keep only labels that are at least window_s apart
     window_us = window_s * 1e6  # Convert seconds to microseconds
@@ -225,6 +224,7 @@ def extract_proportions_smooth(windows, labels, percentage, ref, config):
 
         # find fraction of time outside limits
         out = (mean_arr < lower_limits.values) | (mean_arr > upper_limits.values)
+        assert not np.isnan(out).any()
         frac_out = out.mean()
 
         # set true if outside <= 20% of the time
@@ -300,6 +300,7 @@ def filter_na(window):
         # print("WARNING: large amount of Nas in window.")
         return None
     return window
+
 
 def impute(window, strategy="lin_interpolate"):
     # imputes missing values given a window according to the specified strategy
@@ -420,10 +421,12 @@ def get_windows_var(v, ptid, window_index, window_s, config):
     file_path = config.data_file
     strategy = config.strategy
     percentage = config.percentage
+    chop = config.chop
 
     with h5py.File(file_path, "r") as f:
         # load labels[targets] and var timeseries
         labels = pd.DataFrame(f[f"{ptid}/labels"][...][TARGETS + ["DateTime"]])
+
         if v in f[f"{ptid}/raw/numerics"].keys():
             v_long = f"numerics/{v}"
         else:
@@ -507,6 +510,11 @@ def get_windows_var(v, ptid, window_index, window_s, config):
         labels["segment"] = pd.Series(first_idx, index=labels.index)
         labels = labels[mask]  # keep only labels that fall within the segments
 
+        # cut label segments that are longer than 5 days
+        if chop > 0:
+            elapsed = labels.DateTime - labels.DateTime.iloc[0]
+            labels = labels[elapsed <= chop * 24 * 60 * 60 * 1e6]
+
         if labels.shape[0] != 0:
             # select out the windows
             df, labels = get_window(
@@ -558,7 +566,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 if w["w"] is not None
             ]
             # verify
-            nan_status = np.array([np.isnan(w['w']).all() for w in windows_filtered])
+            nan_status = np.array([np.isnan(w["w"]).all() for w in windows_filtered])
             if nan_status.any():
                 print("windows with all nans still")
                 print(nan_status)

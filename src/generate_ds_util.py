@@ -18,9 +18,11 @@ for w, v, g, x, f, s in product(
 
     base = f"-m smooth -g {g} -w {w} -x {x} -f {f} -sf {s}"
     if v != "":
-        base = base + f" -v {v}"
+        continue
+    base_chop = base + " -c 2"
 
     lines.append(base)
+    lines.append(base_chop)
 
 # randomize lines
 rng.shuffle(lines)

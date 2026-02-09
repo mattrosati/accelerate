@@ -158,16 +158,18 @@ if __name__ == "__main__":
     y_train = labels["in?"].astype(int)
     groups = labels["ptid"].astype(str)
 
-    ray.init(_temp_dir=args.log_dir, include_dashboard=False, logging_level=logging.ERROR)
+    ray.init(
+        _temp_dir=args.log_dir, include_dashboard=False, logging_level=logging.ERROR
+    )
     session_dir = ray._private.worker.global_worker.node.get_session_dir_path()
     print(session_dir)
 
     # shuffle and index if debugging
-    if args.debug:
-        print(f"Training dataset shape: {X_train.shape}.")
+    length = 20_000
+    print(f"Training dataset shape: {X_train.shape}.")
+    if args.debug and X_train.shape[0] > length:
         print("Using a smaller dataset size to be speedy.")
         # this should be a stratified k fold thing
-        length = 20_000
 
         # len(X) // 10_000 = num_splits, every split will be approximately length large
 
@@ -415,6 +417,4 @@ if __name__ == "__main__":
     print(conf_mat)
     # print("Could not compute confusion matrix.")
 
-
     print(f"RAYLOG_DIR={session_dir}")
-        

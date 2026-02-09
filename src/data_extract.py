@@ -83,19 +83,17 @@ def normalize(
                 # flip tail
                 z_arr = 100.0 - z_arr
             scaler = RobustScaler(quantile_range=(10.0, 90.0))
-            scaled_values = scaler.fit_transform(z_arr)
 
         else:
             if v == "spo2":
                 # flip tail, then box cox normalization
                 scaler = PowerTransformer()
                 z_arr = 100.0 - z_arr
-
-                scaled_values = scaler.fit_transform(z_arr)
             else:
                 # for others, do classic normalization
                 scaler = StandardScaler()
-                scaled_values = scaler.fit_transform(z_arr)
+
+        scaled_values = scaler.fit_transform(z_arr)
 
         scaled_values = scaled_values.reshape(orig_shape)
 
@@ -118,18 +116,14 @@ def normalize(
         z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
         z_arr_test = da.from_zarr(z_arr_store_test)
         orig_shape = z_arr_test.shape
+
         z_arr_test = z_arr_test.reshape(-1, 1).compute()
 
-        if scaler_mode == "robust":
-            if v == "spo2":
-                z_arr_test = 100.0 - z_arr_test
+        if v == "spo2":
+            z_arr_test = 100.0 - z_arr_test
             scaled_values = scaler.transform(z_arr_test)
         else:
-            if v == "spo2":
-                z_arr_test = 100.0 - z_arr_test
-                scaled_values = scaler.transform(z_arr_test)
-            else:
-                scaled_values = scaler.transform(z_arr_test)
+            scaled_values = scaler.transform(z_arr_test)
 
         scaled_values = scaled_values.reshape(orig_shape)
         scaled_values = da.from_array(scaled_values)
@@ -413,17 +407,22 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
             if z_arr.shape[1] != min_points:
                 time_grid_mult = z_arr.shape[1] // min_points
                 if strategy == "mean":
-                    downsampled = da.reshape(
-                        z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)
-                    ).mean(axis=-1)
+                    downsampled = da.nanmean(
+                        da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)),
+                        axis=-1,
+                    )
                 elif strategy == "median":
-                    downsampled = da.median(
+                    downsampled = da.nanmedian(
                         da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)),
                         axis=-1,
                     )
                 print(f"Downsampled to {downsampled.shape}")
             else:
                 downsampled = z_arr
+
+            # if s == "test":
+            #     print("Checking test dataset for problems:")
+            #     do_tests(downsampled)
 
             # downsample even further if desired
             if frequency < 60:
@@ -434,9 +433,9 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
                 )
 
                 if strategy == "mean":
-                    downsampled = downsampled.mean(axis=-1)
+                    downsampled = da.nanmean(downsampled, axis=-1)
                 elif strategy == "median":
-                    downsampled = da.median(downsampled, axis=-1)
+                    downsampled = da.nanmedian(downsampled, axis=-1)
 
                 print(f"Further downsampled to {downsampled.shape}")
             da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))
@@ -588,6 +587,13 @@ if __name__ == "__main__":
         help="Non-overlapping windows.",
         action="store_true",
     )
+    parser.add_argument(
+        "--chop",
+        "-c",
+        help="What length of time from first limits calculation to cut recording at.",
+        type=int,
+        default=-1,
+    )
 
     args = parser.parse_args()
     config = args
@@ -610,6 +616,8 @@ if __name__ == "__main__":
         dataset_name = f"freq{args.frequency}_" + dataset_name
     if args.r2_threshold > 0.0:
         dataset_name = f"{args.r2_threshold:.2f}r2_" + dataset_name
+    if args.chop > 0:
+        dataset_name = f"chop{args.chop}_" + dataset_name
     print(f"DATASET = {os.path.join(args.top_dir, dataset_name)}")
 
     print(
@@ -806,15 +814,13 @@ if __name__ == "__main__":
                 x_input = x_input.reshape(x_input.shape[0], len(args.variables), -1)
                 x_tensor = torch.tensor(x_input).float()
                 out = [
-                    i.cpu().numpy().mean(axis=(0, 1))
+                    np.nanmean(i.cpu().numpy(), axis=(0, 1))
                     for i in pipeline.embed(inputs=x_tensor)[0]
                 ]
                 out_embed = np.vstack(out)
 
                 # needs to be saved back as zarr, can't concatenate into memory
                 z[i * batch_size : end, :] = out_embed
-
-            # print(z.mean().compute())
 
     if (
         os.path.exists(os.path.join(args.top_dir, dataset_name, "permanent"))
