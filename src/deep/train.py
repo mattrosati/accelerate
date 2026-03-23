@@ -1,10 +1,8 @@
 """CLI training loop for recurrent sequence models.
 
-The script mirrors the rest of the repository's training entrypoints:
-- load windows from ``permanent/train`` and ``permanent/test``
-- derive a grouped validation split from the training partition
-- train a recurrent binary classifier with optional patient-balanced sampling
-- save checkpoints, CSV history, JSON summary, and W&B artifacts
+The module exposes reusable helpers so a single training run and a
+hyperparameter search can share the same data loading, grouped split, metrics,
+checkpointing, and W&B logging paths.
 """
 
 import json
@@ -12,7 +10,7 @@ import os
 import random
 import sys
 import warnings
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
 
@@ -36,6 +34,71 @@ from deep.data import (  # noqa: E402
     make_patient_weights,
 )
 from deep.models import GRUClassifier, LSTMClassifier  # noqa: E402
+
+
+def build_parser(add_help=True):
+    """Build the argparse parser for one deep-learning training run."""
+    parser = ArgumentParser(add_help=add_help)
+    parser.add_argument("--train_dir", type=str, required=True)
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["lstm", "gru"],
+        required=True,
+    )
+    parser.add_argument(
+        "--data_mode",
+        type=str,
+        choices=["raw"],
+        default="raw",
+        help="Deep recurrent models currently operate on raw multivariate windows.",
+    )
+    parser.add_argument("--run_name", type=str, default="")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--fold_idx", type=int, default=0)
+    parser.add_argument("--n_splits", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--hidden_dim", type=int, default=128)
+    parser.add_argument("--num_layers", type=int, default=2)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--bidirectional", action="store_true")
+    parser.add_argument(
+        "--patient_balance",
+        type=str,
+        choices=["none", "sampler"],
+        default="sampler",
+        help="Sampler mode to equalize per-patient contribution during training.",
+    )
+    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Device string like cpu, cuda, cuda:0, or auto.",
+    )
+    parser.add_argument("--early_stopping_patience", type=int, default=10)
+    parser.add_argument(
+        "--monitor",
+        type=str,
+        choices=["val_patient_auc", "val_auc", "val_loss"],
+        default="val_patient_auc",
+    )
+    parser.add_argument("--wandb_project", type=str, default="accelerate-deep")
+    parser.add_argument("--wandb_entity", type=str, default="")
+    parser.add_argument("--wandb_group", type=str, default="")
+    parser.add_argument("--wandb_job_type", type=str, default="")
+    parser.add_argument("--wandb_tags", nargs="*", default=[])
+    parser.add_argument(
+        "--wandb_mode",
+        type=str,
+        choices=["online", "offline", "disabled"],
+        default=os.environ.get("WANDB_MODE", "online"),
+    )
+    return parser
 
 
 def seed_everything(seed):
@@ -185,6 +248,25 @@ def save_json(path, payload):
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
+def load_data_bundle(train_dir, data_mode):
+    """Load the repository train/test splits once for reuse across trials."""
+    train_X, train_y, train_groups, _, channels = load_split_arrays(
+        train_dir, "train", data_mode=data_mode
+    )
+    test_X, test_y, test_groups, _, _ = load_split_arrays(
+        train_dir, "test", data_mode=data_mode
+    )
+    return {
+        "train_X": train_X,
+        "train_y": train_y,
+        "train_groups": train_groups,
+        "test_X": test_X,
+        "test_y": test_y,
+        "test_groups": test_groups,
+        "channels": channels,
+    }
+
+
 def maybe_init_wandb(
     args,
     run_name,
@@ -216,96 +298,23 @@ def maybe_init_wandb(
         },
         "mode": args.wandb_mode,
         "dir": model_store,
+        "reinit": True,
     }
     if args.wandb_entity:
         wandb_kwargs["entity"] = args.wandb_entity
+    if args.wandb_group:
+        wandb_kwargs["group"] = args.wandb_group
+    if args.wandb_job_type:
+        wandb_kwargs["job_type"] = args.wandb_job_type
+    if args.wandb_tags:
+        wandb_kwargs["tags"] = args.wandb_tags
     return wandb.init(**wandb_kwargs)
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("--train_dir", type=str, required=True)
-    parser.add_argument(
-        "--model",
-        type=str,
-        choices=["lstm", "gru"],
-        required=True,
-    )
-    parser.add_argument(
-        "--data_mode",
-        type=str,
-        choices=["raw"],
-        default="raw",
-        help="Deep recurrent models currently operate on raw multivariate windows.",
-    )
-    parser.add_argument("--run_name", type=str, default="")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--fold_idx", type=int, default=0)
-    parser.add_argument("--n_splits", type=int, default=5)
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=256)
-    parser.add_argument("--hidden_dim", type=int, default=128)
-    parser.add_argument("--num_layers", type=int, default=2)
-    parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-4)
-    parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--bidirectional", action="store_true")
-    parser.add_argument(
-        "--patient_balance",
-        type=str,
-        choices=["none", "sampler"],
-        default="sampler",
-        help="Sampler mode to equalize per-patient contribution during training.",
-    )
-    parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        help="Device string like cpu, cuda, cuda:0, or auto.",
-    )
-    parser.add_argument("--early_stopping_patience", type=int, default=10)
-    parser.add_argument(
-        "--monitor",
-        type=str,
-        choices=["val_patient_auc", "val_auc", "val_loss"],
-        default="val_patient_auc",
-    )
-    parser.add_argument("--wandb_project", type=str, default="accelerate-deep")
-    parser.add_argument("--wandb_entity", type=str, default="")
-    parser.add_argument(
-        "--wandb_mode",
-        type=str,
-        choices=["online", "offline", "disabled"],
-        default=os.environ.get("WANDB_MODE", "online"),
-    )
-
-    args = parser.parse_args()
-    seed_everything(args.seed)
-
-    train_X, train_y, train_groups, _, channels = load_split_arrays(
-        args.train_dir, "train", data_mode=args.data_mode
-    )
-    test_X, test_y, test_groups, _, _ = load_split_arrays(
-        args.train_dir, "test", data_mode=args.data_mode
-    )
-
-    train_idx, val_idx = make_grouped_split(
-        train_y,
-        train_groups,
-        n_splits=args.n_splits,
-        seed=args.seed,
-        fold_idx=args.fold_idx,
-    )
-
-    X_tr, X_val = train_X[train_idx], train_X[val_idx]
-    y_tr, y_val = train_y[train_idx], train_y[val_idx]
-    groups_tr, groups_val = train_groups[train_idx], train_groups[val_idx]
-
-    if len(y_tr) == 0 or len(y_val) == 0:
-        raise ValueError("Grouped split produced an empty training or validation fold.")
-
+def _make_dataloaders(
+    args, X_tr, y_tr, groups_tr, X_val, y_val, groups_val, test_X, test_y, test_groups
+):
+    """Build train/validation/test dataloaders for one grouped split."""
     train_ds = SequenceDataset(X_tr, y_tr, groups_tr)
     val_ds = SequenceDataset(X_val, y_val, groups_val)
     test_ds = SequenceDataset(test_X, test_y, test_groups)
@@ -351,6 +360,70 @@ if __name__ == "__main__":
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=torch.cuda.is_available(),
+    )
+
+    return (
+        train_ds,
+        val_ds,
+        test_ds,
+        train_loader,
+        train_eval_loader,
+        val_loader,
+        test_loader,
+    )
+
+
+def run_training(args, data_bundle=None, print_summary=True):
+    """Run one recurrent-model training job and return its summary payload."""
+    if not isinstance(args, Namespace):
+        raise TypeError("run_training expects an argparse.Namespace.")
+
+    seed_everything(args.seed)
+    if data_bundle is None:
+        data_bundle = load_data_bundle(args.train_dir, args.data_mode)
+
+    train_X = data_bundle["train_X"]
+    train_y = data_bundle["train_y"]
+    train_groups = data_bundle["train_groups"]
+    test_X = data_bundle["test_X"]
+    test_y = data_bundle["test_y"]
+    test_groups = data_bundle["test_groups"]
+    channels = data_bundle["channels"]
+
+    train_idx, val_idx = make_grouped_split(
+        train_y,
+        train_groups,
+        n_splits=args.n_splits,
+        seed=args.seed,
+        fold_idx=args.fold_idx,
+    )
+
+    X_tr, X_val = train_X[train_idx], train_X[val_idx]
+    y_tr, y_val = train_y[train_idx], train_y[val_idx]
+    groups_tr, groups_val = train_groups[train_idx], train_groups[val_idx]
+
+    if len(y_tr) == 0 or len(y_val) == 0:
+        raise ValueError("Grouped split produced an empty training or validation fold.")
+
+    (
+        train_ds,
+        val_ds,
+        test_ds,
+        train_loader,
+        train_eval_loader,
+        val_loader,
+        test_loader,
+    ) = _make_dataloaders(
+        args,
+        X_tr,
+        y_tr,
+        groups_tr,
+        X_val,
+        y_val,
+        groups_val,
+        test_X,
+        test_y,
+        test_groups,
     )
 
     run_name = args.run_name or datetime.now().strftime("%Y-%m-%d_%H:%M")
@@ -475,6 +548,9 @@ if __name__ == "__main__":
     test_metrics = evaluate(model, test_loader, criterion, device, test_groups)
 
     summary = {
+        "run_name": run_name,
+        "model_store": model_store,
+        "best_path": best_path,
         "best_epoch": best_epoch,
         "best_metric": best_metric,
         "monitor": monitor_name,
@@ -485,8 +561,7 @@ if __name__ == "__main__":
 
     history_path = os.path.join(model_store, f"{args.model}_history.csv")
     summary_path = os.path.join(model_store, f"{args.model}_summary.json")
-    history_df = pd.DataFrame(history)
-    history_df.to_csv(history_path, index=False)
+    pd.DataFrame(history).to_csv(history_path, index=False)
     save_json(summary_path, summary)
 
     if wandb_run is not None:
@@ -516,5 +591,18 @@ if __name__ == "__main__":
         wandb.log_artifact(artifact)
         wandb.finish()
 
-    print(f"Saved deep model artifacts to {model_store}")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if print_summary:
+        print(f"Saved deep model artifacts to {model_store}")
+        print(json.dumps(summary, indent=2, sort_keys=True))
+
+    return summary
+
+
+def main():
+    """CLI entrypoint for a single recurrent-model training run."""
+    args = build_parser().parse_args()
+    run_training(args)
+
+
+if __name__ == "__main__":
+    main()
