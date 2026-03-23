@@ -1,14 +1,15 @@
-"""Recurrent neural network classifiers used by the deep training CLI."""
+"""Recurrent neural network predictors used by the deep training CLI."""
 
 import torch
 from torch import nn
 
 
 class RecurrentClassifier(nn.Module):
-    """Shared recurrent backbone with a small classification head.
+    """Shared recurrent backbone with a small scalar prediction head.
 
     The model consumes tensors shaped ``[batch, timesteps, channels]`` and
-    predicts a single logit for binary classification.
+    predicts one score per window. The training task decides whether that
+    score is interpreted as a classification logit or a regression output.
     """
 
     def __init__(
@@ -40,7 +41,7 @@ class RecurrentClassifier(nn.Module):
         )
 
     def forward(self, x):
-        """Return logits for a batch of sequence windows."""
+        """Return one scalar prediction for each sequence window."""
         _, hidden = self.rnn(x)
         if isinstance(hidden, tuple):
             hidden = hidden[0]
@@ -58,7 +59,7 @@ class RecurrentClassifier(nn.Module):
 
 
 class LSTMClassifier(RecurrentClassifier):
-    """Binary classifier backed by an ``nn.LSTM`` encoder."""
+    """LSTM-backed recurrent predictor."""
 
     def __init__(
         self,
@@ -79,7 +80,7 @@ class LSTMClassifier(RecurrentClassifier):
 
 
 class GRUClassifier(RecurrentClassifier):
-    """Binary classifier backed by an ``nn.GRU`` encoder."""
+    """GRU-backed recurrent predictor."""
 
     def __init__(
         self,

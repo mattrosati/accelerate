@@ -8,6 +8,7 @@ paths as a normal single training run.
 import json
 import os
 import sys
+import warnings
 from argparse import ArgumentParser, Namespace
 from copy import deepcopy
 from datetime import datetime
@@ -20,7 +21,12 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from deep.train import build_parser, load_data_bundle, run_training  # noqa: E402
+from deep.train import (  # noqa: E402
+    build_parser,
+    load_data_bundle,
+    resolve_target_col,
+    run_training,
+)
 
 
 def build_search_parser():
@@ -41,7 +47,17 @@ def build_search_parser():
     parser.add_argument(
         "--search_metric",
         type=str,
-        choices=["val_patient_auc", "val_auc", "val_loss"],
+        choices=[
+            "val_patient_auc",
+            "val_auc",
+            "val_loss",
+            "val_mae",
+            "val_rmse",
+            "val_r2",
+            "val_patient_mae",
+            "val_patient_rmse",
+            "val_patient_r2",
+        ],
         default="val_patient_auc",
     )
     parser.add_argument(
@@ -97,13 +113,23 @@ def suggest_trial_args(base_args, trial):
 
 def extract_metric(summary, metric_name):
     """Map a search metric name to the matching summary field."""
-    if metric_name == "val_loss":
-        return summary["val"]["loss"]
-    if metric_name == "val_auc":
-        return summary["val"]["auc"]
-    if metric_name == "val_patient_auc":
-        return summary["val"]["patient_auc"]
-    raise ValueError(f"Unsupported search metric: {metric_name}")
+    if not metric_name.startswith("val_"):
+        raise ValueError(f"Unsupported search metric: {metric_name}")
+    return summary["val"][metric_name.removeprefix("val_")]
+
+
+def resolve_search_metric(args):
+    """Pick a metric compatible with the current training task."""
+    if args.task == "regression" and args.search_metric in {
+        "val_auc",
+        "val_patient_auc",
+    }:
+        warnings.warn(
+            f"Switching search metric from {args.search_metric} to val_patient_rmse for regression.",
+            stacklevel=2,
+        )
+        return "val_patient_rmse"
+    return args.search_metric
 
 
 def save_json(path, payload):
@@ -117,12 +143,22 @@ def main():
     args = build_search_parser().parse_args()
     if not args.search_name:
         args.search_name = datetime.now().strftime("%Y-%m-%d_%H:%M")
+    args.search_metric = resolve_search_metric(args)
 
     search_store = os.path.join(args.train_dir, f"deep_search_{args.search_name}")
     os.makedirs(search_store, exist_ok=True)
 
-    data_bundle = load_data_bundle(args.train_dir, args.data_mode)
-    direction = "minimize" if args.search_metric == "val_loss" else "maximize"
+    data_bundle = load_data_bundle(
+        args.train_dir,
+        args.data_mode,
+        resolve_target_col(args),
+    )
+    direction = (
+        "minimize"
+        if args.search_metric
+        in {"val_loss", "val_mae", "val_rmse", "val_patient_mae", "val_patient_rmse"}
+        else "maximize"
+    )
     study = optuna.create_study(
         study_name=args.search_name,
         direction=direction,

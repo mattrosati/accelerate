@@ -70,7 +70,7 @@ def reshape_flat_windows(X, num_channels):
     return np.transpose(X, (0, 2, 1))
 
 
-def load_split_arrays(train_dir, split, data_mode="raw"):
+def load_split_arrays(train_dir, split, data_mode="raw", target_col="in?"):
     """Load one repository split and reshape it into recurrent-model input.
 
     Returns feature tensors, binary labels, base-patient groups, the filtered
@@ -96,7 +96,10 @@ def load_split_arrays(train_dir, split, data_mode="raw"):
 
     # Drop invalid or missing labels before any reshaping so downstream tensor
     # dimensions stay aligned with the filtered dataframe.
-    valid_mask = labels["in?"].notna().to_numpy()
+    if target_col not in labels.columns:
+        raise ValueError(f"Target column `{target_col}` not found in labels dataframe.")
+
+    valid_mask = labels[target_col].notna().to_numpy()
     if "invalid" in labels.columns:
         valid_mask &= ~labels["invalid"].astype(bool).to_numpy()
 
@@ -107,7 +110,7 @@ def load_split_arrays(train_dir, split, data_mode="raw"):
     if labels.empty:
         raise ValueError(f"No valid labels found for split `{split}` in {train_dir}.")
 
-    y = labels["in?"].astype(int).to_numpy()
+    y = pd.to_numeric(labels[target_col], errors="raise").astype(np.float32).to_numpy()
     groups = infer_base_ptid(labels)
 
     channels = parse_channels_from_train_dir(train_dir)
@@ -116,11 +119,13 @@ def load_split_arrays(train_dir, split, data_mode="raw"):
     return X, y, groups, labels, channels
 
 
-def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0):
+def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0, task="classification"):
     """Build one grouped train/validation split.
 
     Stratified grouping is preferred, but the helper falls back to ``GroupKFold``
-    when the label/group layout is too constrained to stratify safely.
+    when the label/group layout is too constrained to stratify safely. For
+    regression targets, plain grouped folds are used because continuous labels
+    cannot be stratified directly.
     """
     groups = np.asarray(groups).astype(str)
     unique_groups = np.unique(groups)
@@ -135,20 +140,24 @@ def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0):
             stacklevel=2,
         )
 
-    try:
-        splitter = StratifiedGroupKFold(
-            n_splits=effective_splits,
-            shuffle=True,
-            random_state=seed,
-        )
-        folds = list(splitter.split(np.zeros_like(y), y, groups))
-    except ValueError as exc:
-        warnings.warn(
-            f"Falling back to GroupKFold because StratifiedGroupKFold failed: {exc}",
-            stacklevel=2,
-        )
+    if task == "regression":
         splitter = GroupKFold(n_splits=effective_splits)
         folds = list(splitter.split(np.zeros_like(y), y, groups))
+    else:
+        try:
+            splitter = StratifiedGroupKFold(
+                n_splits=effective_splits,
+                shuffle=True,
+                random_state=seed,
+            )
+            folds = list(splitter.split(np.zeros_like(y), y, groups))
+        except ValueError as exc:
+            warnings.warn(
+                f"Falling back to GroupKFold because StratifiedGroupKFold failed: {exc}",
+                stacklevel=2,
+            )
+            splitter = GroupKFold(n_splits=effective_splits)
+            folds = list(splitter.split(np.zeros_like(y), y, groups))
 
     if fold_idx >= len(folds):
         raise ValueError(

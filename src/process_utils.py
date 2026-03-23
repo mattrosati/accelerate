@@ -183,21 +183,28 @@ def extract_proportions(windows, labels, config, ref=None):
 def extract_proportions_smooth(windows, labels, percentage, ref, config):
     smooth_frac = config.smooth_frac
     r2_min = config.r2_threshold
-    in_out = np.empty(shape=len(windows))
+    in_out = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
+    frac_out_arr = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
+    mapopt_arr = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
     for i, w in enumerate(windows):
         start = labels["start_idx"].iloc[ref[i]]
         end = labels["end_idx"].iloc[ref[i]]
         lower_limits = labels["LLA_Yale_affected_beta"].loc[start:end]
         upper_limits = labels["ULA_Yale_affected_beta"].loc[start:end]
+        mapopt = labels["MAPopt_Yale_affected_beta"].loc[start:end]
 
         r2 = labels["Yale_R2full_affected"].loc[start:end]
         if r2_min > 0.0 and (r2 < r2_min).any():
             in_out[i] = np.nan
+            frac_out_arr[i] = np.nan
+            mapopt_arr[i] = np.nan
             continue
 
         # if there's missing data in the LA calculation, label is na
-        if lower_limits.isna().any() or upper_limits.isna().any():
+        if lower_limits.isna().any() or upper_limits.isna().any() or mapopt.isna().any():
             in_out[i] = np.nan
+            frac_out_arr[i] = np.nan
+            mapopt_arr[i] = np.nan
             continue
         w_vector = w["w"]
 
@@ -218,6 +225,8 @@ def extract_proportions_smooth(windows, labels, percentage, ref, config):
         if (np.isnan(split_window)).all(axis=1).any():
             # these entries will get removed once we filter for windows that have a lot of nans
             in_out[i] = np.nan
+            frac_out_arr[i] = np.nan
+            mapopt_arr[i] = np.nan
             continue
 
         mean_arr = np.nanmean(split_window, axis=1)
@@ -226,23 +235,34 @@ def extract_proportions_smooth(windows, labels, percentage, ref, config):
         out = (mean_arr < lower_limits.values) | (mean_arr > upper_limits.values)
         assert not np.isnan(out).any()
         frac_out = out.mean()
+        frac_out_arr[i] = frac_out
+        mapopt_arr[i] = mapopt.mean()
 
         # set true if outside <= 20% of the time
         in_out[i] = frac_out <= smooth_frac
         # label as “outside AR” if >46% of time outside AR: which means that "inside AR" if >=54% of time inside
         # in_out[i] = frac_out <= 0.46
 
-    return in_out
+    return {
+        "in?": in_out,
+        "frac_out": frac_out_arr,
+        "MAPopt_Yale_affected_beta": mapopt_arr,
+    }
 
 
 def extract_proportions_mean(windows, labels):
-    in_out = np.empty(shape=len(windows), dtype=bool)
+    in_out = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
+    frac_out_arr = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
+    mapopt_arr = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
     for i, w in enumerate(windows):
         lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
         upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
+        mapopt = labels["MAPopt_Yale_affected_beta"].iloc[i]
 
-        if pd.isna(lower_limit) or pd.isna(upper_limit):
+        if pd.isna(lower_limit) or pd.isna(upper_limit) or pd.isna(mapopt):
             in_out[i] = np.nan
+            frac_out_arr[i] = np.nan
+            mapopt_arr[i] = np.nan
             continue
 
         w_vector = w["w"]
@@ -253,20 +273,37 @@ def extract_proportions_mean(windows, labels):
         if np.isnan(w_vector).all():
             # these entries will get removed once we filter for windows that have a lot of nans
             in_out[i] = np.nan
+            frac_out_arr[i] = np.nan
+            mapopt_arr[i] = np.nan
             continue
         w_mean = np.nanmean(w_vector)
         # if np.isnan(w_mean):
         #     print("Window has nans")
         in_out[i] = (w_mean >= lower_limit) and (w_mean <= upper_limit)
+        frac_out_arr[i] = float(not in_out[i])
+        mapopt_arr[i] = mapopt
 
-    return in_out
+    return {
+        "in?": in_out,
+        "frac_out": frac_out_arr,
+        "MAPopt_Yale_affected_beta": mapopt_arr,
+    }
 
 
 def extract_proportions_count(windows, labels, percentage=0.5):
-    in_out = np.empty(shape=len(windows), dtype=bool)
+    in_out = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
+    frac_out_arr = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
+    mapopt_arr = np.full(shape=len(windows), fill_value=np.nan, dtype=float)
     for i, w in enumerate(windows):
         lower_limit = labels["LLA_Yale_affected_beta"].iloc[i]
         upper_limit = labels["ULA_Yale_affected_beta"].iloc[i]
+        mapopt = labels["MAPopt_Yale_affected_beta"].iloc[i]
+
+        if pd.isna(lower_limit) or pd.isna(upper_limit) or pd.isna(mapopt):
+            in_out[i] = np.nan
+            frac_out_arr[i] = np.nan
+            mapopt_arr[i] = np.nan
+            continue
 
         w_vector = w["w"]
 
@@ -280,6 +317,8 @@ def extract_proportions_count(windows, labels, percentage=0.5):
         abp_status = (w_vector >= lower_limit) & (w_vector <= upper_limit)
         proportion_in = abp_status.sum() / w["total_length"]
         proportion_out = 1 - proportion_in
+        frac_out_arr[i] = proportion_out
+        mapopt_arr[i] = mapopt
 
         proportion_gap = w["overlap_len"] / w["total_length"]
 
@@ -289,7 +328,11 @@ def extract_proportions_count(windows, labels, percentage=0.5):
         else:
             in_out[i] = proportion_in > proportion_out
 
-    return in_out
+    return {
+        "in?": in_out,
+        "frac_out": frac_out_arr,
+        "MAPopt_Yale_affected_beta": mapopt_arr,
+    }
 
 
 def filter_na(window):
@@ -543,7 +586,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 ref = None
                 if strategy == "smooth":
                     ref = df[:, 4].tolist()
-                in_out = extract_proportions(windows, labels, config, ref=ref)
+                targets = extract_proportions(windows, labels, config, ref=ref)
 
             # extract window data: impute
             windows = [
@@ -579,9 +622,8 @@ def get_windows_var(v, ptid, window_index, window_s, config):
 
             # extract proportion_in T/F data
             if v == "abp":
-                in_out = in_out[
-                    [i for i, w in enumerate(windows) if w["w"] is not None]
-                ]
+                keep_idx = [i for i, w in enumerate(windows) if w["w"] is not None]
+                targets = {k: v[keep_idx] for k, v in targets.items()}
 
                 # drop ref
                 df = np.array(df)[:, :4]
@@ -590,14 +632,16 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                     df, columns=["startidx", "endidx", "overlap_len", "tot_len"]
                 )
                 df["datetime"] = np.array(labels["DateTime"])
-                df["in?"] = in_out
+                df["in?"] = targets["in?"]
+                df["frac_out"] = targets["frac_out"]
+                df["MAPopt_Yale_affected_beta"] = targets["MAPopt_Yale_affected_beta"]
                 df["ptid"] = ptid
                 # Persist both the file id and the underlying patient id so
                 # downstream grouped CV can keep multipart recordings together.
                 df["base_ptid"] = ptid.split("_")[0]
                 df["invalid"] = df["in?"].isna()
 
-                if len(in_out) == 0:
+                if len(targets["in?"]) == 0:
                     print("No valid windows extracted for patient:", ptid)
                 return df, windows_filtered
             else:
