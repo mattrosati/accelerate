@@ -592,6 +592,7 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 df["datetime"] = np.array(labels["DateTime"])
                 df["in?"] = in_out
                 df["ptid"] = ptid
+                df["base_ptid"] = ptid.split("_")[0]
                 df["invalid"] = df["in?"].isna()
 
                 if len(in_out) == 0:

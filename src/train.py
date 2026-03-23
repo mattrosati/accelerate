@@ -113,6 +113,19 @@ if __name__ == "__main__":
         help="Directory to log ray stuff.",
         default="/home/mr2238/project_pi_np442/mr2238/tmp",
     )
+    parser.add_argument(
+        "--patient_balance",
+        type=str,
+        choices=["none", "weight", "subsample"],
+        default="weight",
+        help="How to balance training contribution across patients within each CV fold.",
+    )
+    parser.add_argument(
+        "--max_windows_per_patient",
+        type=int,
+        default=50,
+        help="Maximum windows per patient when using patient-balanced subsampling.",
+    )
 
     args = parser.parse_args()
     np.random.seed(420)
@@ -156,7 +169,10 @@ if __name__ == "__main__":
         os.path.join(args.train_dir, "permanent", "train", "labels.pkl")
     )
     y_train = labels["in?"].astype(int)
-    groups = labels["ptid"].astype(str)
+    if "base_ptid" in labels.columns:
+        groups = labels["base_ptid"].astype(str)
+    else:
+        groups = labels["ptid"].astype(str).str.split("_").str[0]
 
     ray.init(
         _temp_dir=args.log_dir, include_dashboard=False, logging_level=logging.ERROR
@@ -338,15 +354,23 @@ if __name__ == "__main__":
 
     model_name = f"{args.model}{'+sv' if args.select_var else ''}_{args.data_mode}"
     print(f"Model name: {model_name}")
+    print(f"Patient balancing mode: {args.patient_balance}")
+    rank_metric = (
+        "mean_val_patient_auc"
+        if args.patient_balance in ["weight", "subsample"]
+        else "mean_val_auc"
+    )
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,
         scoring=metrics,
         num_samples=n_iter,
-        rank_metric="mean_val_auc",
+        rank_metric=rank_metric,
         cv=[5, 3],  # repeats five folds 3 times
         store_path=model_store,
         model_name=model_name,
+        balance_mode=args.patient_balance,
+        max_windows_per_patient=args.max_windows_per_patient,
     )
     X_train = X_train.compute()
 

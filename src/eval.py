@@ -16,6 +16,25 @@ from tuner import train_cv
 
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 
+
+def make_patient_weights(groups):
+    groups = np.asarray(groups)
+    unique_groups, counts = np.unique(groups, return_counts=True)
+    count_map = dict(zip(unique_groups, counts))
+    weights = np.array([1.0 / count_map[g] for g in groups], dtype=float)
+    return weights * (len(weights) / weights.sum())
+
+
+def predict_scores(estimator, X):
+    if hasattr(estimator, "predict_proba"):
+        y_prob = estimator.predict_proba(X)[:, 1]
+        y_pred = (y_prob >= 0.5).astype(int)
+    else:
+        y_prob = estimator.decision_function(X)
+        y_pred = (y_prob >= 0).astype(int)
+    return y_prob, y_pred
+
+
 if __name__ == "__main__":
     parser = ArgumentParser()
 
@@ -76,6 +95,11 @@ if __name__ == "__main__":
             os.path.join(args.train_dir, "permanent", "test", "labels.pkl")
         )
         y = labels["in?"].astype(int)
+        if "base_ptid" in labels.columns:
+            groups = labels["base_ptid"].astype(str).to_numpy()
+        else:
+            groups = labels["ptid"].astype(str).str.split("_").str[0].to_numpy()
+        patient_weights = make_patient_weights(groups)
 
         # loop over directory of models
         if "adaptive_repeated_cv_search" in os.listdir(model_store):
@@ -112,15 +136,16 @@ if __name__ == "__main__":
 
                 # calculate testing metrics
                 estimator = model
-                if hasattr(estimator, "predict_proba"):
-                    y_prob = estimator.predict_proba(X)[:, 1]
-                    y_pred = (y_prob >= 0.5).astype(int)
-                else:
-                    y_prob = estimator.decision_function(X)
-                    y_pred = (y_prob >= 0).astype(int)
+                y_prob, y_pred = predict_scores(estimator, X)
 
                 r["test_balanced_accuracy"] = balanced_accuracy_score(y, y_pred)
                 r["test_auc"] = roc_auc_score(y, y_prob)
+                r["test_patient_balanced_accuracy"] = balanced_accuracy_score(
+                    y, y_pred, sample_weight=patient_weights
+                )
+                r["test_patient_auc"] = roc_auc_score(
+                    y, y_prob, sample_weight=patient_weights
+                )
 
                 r["mode"] = mode
                 r["model"] = model_name
@@ -159,15 +184,16 @@ if __name__ == "__main__":
 
                 # calculate testing metrics
                 estimator = search.best_estimator_
-                if hasattr(estimator, "predict_proba"):
-                    y_prob = estimator.predict_proba(X)[:, 1]
-                    y_pred = (y_prob >= 0.5).astype(int)
-                else:
-                    y_prob = estimator.decision_function(X)
-                    y_pred = (y_prob >= 0).astype(int)
+                y_prob, y_pred = predict_scores(estimator, X)
 
                 r["test_balanced_accuracy"] = balanced_accuracy_score(y, y_pred)
                 r["test_auc"] = roc_auc_score(y, y_prob)
+                r["test_patient_balanced_accuracy"] = balanced_accuracy_score(
+                    y, y_pred, sample_weight=patient_weights
+                )
+                r["test_patient_auc"] = roc_auc_score(
+                    y, y_prob, sample_weight=patient_weights
+                )
 
                 r["mode"] = mode
                 r["model"] = model_name
@@ -175,22 +201,29 @@ if __name__ == "__main__":
                 rows.append(r)
 
         # concatenate rows in one df
-        df = pd.DataFrame(rows).sort_values("mean_val_auc", ascending=False)
+        df = pd.DataFrame(rows)
+        sort_col = (
+            "mean_val_patient_auc" if "mean_val_patient_auc" in df.columns else "mean_val_auc"
+        )
+        df = df.sort_values(sort_col, ascending=False)
 
         # save as csv
         pd.set_option("display.max_columns", None)
         pd.set_option("display.float_format", "{:.4f}".format)
         print("\nAll results:")
+        display_cols = [
+            "model",
+            "mode",
+            "mean_train_auc",
+            "mean_val_auc",
+            "mean_val_patient_auc",
+            "test_balanced_accuracy",
+            "test_auc",
+            "test_patient_balanced_accuracy",
+            "test_patient_auc",
+        ]
+        display_cols = [c for c in display_cols if c in df.columns]
         print(
-            df[
-                [
-                    "model",
-                    "mode",
-                    "mean_train_auc",
-                    "mean_val_auc",
-                    "test_balanced_accuracy",
-                    "test_auc",
-                ]
-            ]
+            df[display_cols]
         )
         df.to_csv(os.path.join(model_store, "results.csv"), index=False)

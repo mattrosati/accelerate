@@ -18,6 +18,13 @@ from constants import TARGETS
 from sklearn.model_selection import train_test_split
 
 
+def make_qcut_codes(series, q=3):
+    bins = min(q, series.nunique())
+    if bins <= 1:
+        return pd.Series(np.zeros(series.shape[0], dtype=int), index=series.index)
+    return pd.qcut(series, q=bins, labels=False, duplicates="drop").astype(int)
+
+
 if __name__ == "__main__":
     parser = ArgumentParser(description="Train and test splits.")
 
@@ -86,20 +93,38 @@ if __name__ == "__main__":
     df = pd.DataFrame(
         df_rows, columns=["ptid", "out_percent", "to_mapopt_s", "seg_len"]
     ).dropna()
+    df["base_ptid"] = df["ptid"].astype(str).str.split("_").str[0]
+
+    patient_rows = []
+    for base_ptid, group in df.groupby("base_ptid"):
+        weights = group["seg_len"].to_numpy(dtype=float)
+        if weights.sum() == 0:
+            weights = np.ones(group.shape[0], dtype=float)
+
+        patient_rows.append(
+            {
+                "base_ptid": base_ptid,
+                "out_percent": np.average(group["out_percent"], weights=weights),
+                "to_mapopt_s": group["to_mapopt_s"].min(),
+                "seg_len": group["seg_len"].sum(),
+            }
+        )
+
+    patient_df = pd.DataFrame(patient_rows)
 
     # make keys by cutting into tertiles for out_percent, time to map opt, and length
-    df["out_percent_cat"] = pd.qcut(df["out_percent"], q=3, labels=False)
-    df["mapopt_cat"] = pd.qcut(df["to_mapopt_s"], q=3, labels=False)
-    df["seg_len_cat"] = pd.qcut(df["seg_len"], q=3, labels=False)
-    df["class"] = (
-        df["out_percent_cat"].astype(str)
-        + df["mapopt_cat"].astype(str)
-        + df["seg_len_cat"].astype(str)
+    patient_df["out_percent_cat"] = make_qcut_codes(patient_df["out_percent"], q=3)
+    patient_df["mapopt_cat"] = make_qcut_codes(patient_df["to_mapopt_s"], q=3)
+    patient_df["seg_len_cat"] = make_qcut_codes(patient_df["seg_len"], q=3)
+    patient_df["class"] = (
+        patient_df["out_percent_cat"].astype(str)
+        + patient_df["mapopt_cat"].astype(str)
+        + patient_df["seg_len_cat"].astype(str)
     )
 
-    print(df)
+    print(patient_df)
     print(
-        df.describe(
+        patient_df.describe(
             percentiles=[
                 0.25,
                 0.5,
@@ -108,15 +133,21 @@ if __name__ == "__main__":
             ]
         )
     )
-    print(df["class"].value_counts())
+    print(patient_df["class"].value_counts())
 
-    keys = df["class"]
+    keys = patient_df["class"]
+    stratify = keys if keys.value_counts().min() >= 2 else None
     train, test = train_test_split(
-        df, random_state=42, train_size=args.train_frac, stratify=keys
+        patient_df, random_state=42, train_size=args.train_frac, stratify=stratify
     )
 
     # apply train or test label to f.ptid.attrs
-    for t in train["ptid"]:
-        f[t].attrs["split"] = "train"
-    for t in test["ptid"]:
-        f[t].attrs["split"] = "test"
+    train_ids = set(train["base_ptid"])
+    test_ids = set(test["base_ptid"])
+    for t in df["ptid"]:
+        base_ptid = t.split("_")[0]
+        f[t].attrs["base_ptid"] = base_ptid
+        if base_ptid in train_ids:
+            f[t].attrs["split"] = "train"
+        elif base_ptid in test_ids:
+            f[t].attrs["split"] = "test"
