@@ -2,6 +2,7 @@ import json
 import os
 import random
 import sys
+import warnings
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
@@ -62,25 +63,29 @@ def get_device(requested):
     return torch.device(requested)
 
 
-def predict_scores(model, dataloader, device):
-    model.eval()
-    all_logits = []
-    all_targets = []
-    with torch.no_grad():
-        for X_batch, y_batch in dataloader:
-            X_batch = X_batch.to(device)
-            logits = model(X_batch)
-            all_logits.append(logits.cpu())
-            all_targets.append(y_batch.cpu())
-
-    logits = torch.cat(all_logits).numpy()
-    targets = torch.cat(all_targets).numpy().astype(int)
-    probs = 1.0 / (1.0 + np.exp(-logits))
+def logits_to_predictions(logits):
+    logits = np.asarray(logits, dtype=np.float64)
+    probs = torch.sigmoid(torch.from_numpy(logits)).numpy()
     preds = (probs >= 0.5).astype(int)
-    return probs, preds, targets
+    return probs, preds
+
+
+def metric_or_default(value, maximize):
+    if np.isnan(value):
+        return -np.inf if maximize else np.inf
+    return value
 
 
 def compute_metrics(loss, y_true, y_prob, y_pred, groups):
+    if y_true.size == 0:
+        return {
+            "loss": float(loss),
+            "auc": np.nan,
+            "balanced_accuracy": np.nan,
+            "patient_balanced_accuracy": np.nan,
+            "patient_auc": np.nan,
+        }
+
     metrics = {
         "loss": float(loss),
         "auc": np.nan,
@@ -90,11 +95,13 @@ def compute_metrics(loss, y_true, y_prob, y_pred, groups):
         metrics["auc"] = roc_auc_score(y_true, y_prob)
 
     patient_weights = make_patient_weights(groups)
-    metrics["patient_balanced_accuracy"] = balanced_accuracy_score(
-        y_true, y_pred, sample_weight=patient_weights
-    )
+    metrics["patient_balanced_accuracy"] = np.nan
+    if patient_weights.size > 0:
+        metrics["patient_balanced_accuracy"] = balanced_accuracy_score(
+            y_true, y_pred, sample_weight=patient_weights
+        )
     metrics["patient_auc"] = np.nan
-    if np.unique(y_true).shape[0] > 1:
+    if patient_weights.size > 0 and np.unique(y_true).shape[0] > 1:
         metrics["patient_auc"] = roc_auc_score(
             y_true, y_prob, sample_weight=patient_weights
         )
@@ -106,6 +113,9 @@ def evaluate(model, dataloader, criterion, device, groups):
     model.eval()
     total_loss = 0.0
     total_examples = 0
+    all_logits = []
+    all_targets = []
+
     with torch.no_grad():
         for X_batch, y_batch in dataloader:
             X_batch = X_batch.to(device)
@@ -114,9 +124,16 @@ def evaluate(model, dataloader, criterion, device, groups):
             loss = criterion(logits, y_batch)
             total_loss += loss.item() * X_batch.shape[0]
             total_examples += X_batch.shape[0]
+            all_logits.append(logits.cpu())
+            all_targets.append(y_batch.cpu())
 
-    y_prob, y_pred, y_true = predict_scores(model, dataloader, device)
     avg_loss = total_loss / max(total_examples, 1)
+    if total_examples == 0:
+        return compute_metrics(avg_loss, np.array([], dtype=int), np.array([]), np.array([]), groups)
+
+    logits = torch.cat(all_logits).numpy()
+    y_true = torch.cat(all_targets).numpy().astype(int)
+    y_prob, y_pred = logits_to_predictions(logits)
     return compute_metrics(avg_loss, y_true, y_prob, y_pred, groups)
 
 
@@ -146,6 +163,31 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, grad_clip):
 def save_json(path, payload):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
+
+
+def maybe_init_wandb(args, run_name, model_store, channels, groups_tr, groups_val, test_groups, train_ds, val_ds, test_ds):
+    if args.wandb_mode == "disabled":
+        return None
+
+    wandb_kwargs = {
+        "project": args.wandb_project,
+        "name": f"{args.model}_{run_name}",
+        "config": {
+            **vars(args),
+            "channels": channels,
+            "train_windows": int(len(train_ds)),
+            "val_windows": int(len(val_ds)),
+            "test_windows": int(len(test_ds)),
+            "train_patients": int(np.unique(groups_tr).shape[0]),
+            "val_patients": int(np.unique(groups_val).shape[0]),
+            "test_patients": int(np.unique(test_groups).shape[0]),
+        },
+        "mode": args.wandb_mode,
+        "dir": model_store,
+    }
+    if args.wandb_entity:
+        wandb_kwargs["entity"] = args.wandb_entity
+    return wandb.init(**wandb_kwargs)
 
 
 if __name__ == "__main__":
@@ -210,7 +252,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     seed_everything(args.seed)
 
-    train_X, train_y, train_groups, train_labels, channels = load_split_arrays(
+    train_X, train_y, train_groups, _, channels = load_split_arrays(
         args.train_dir, "train", data_mode=args.data_mode
     )
     test_X, test_y, test_groups, _, _ = load_split_arrays(
@@ -228,6 +270,9 @@ if __name__ == "__main__":
     X_tr, X_val = train_X[train_idx], train_X[val_idx]
     y_tr, y_val = train_y[train_idx], train_y[val_idx]
     groups_tr, groups_val = train_groups[train_idx], train_groups[val_idx]
+
+    if len(y_tr) == 0 or len(y_val) == 0:
+        raise ValueError("Grouped split produced an empty training or validation fold.")
 
     train_ds = SequenceDataset(X_tr, y_tr, groups_tr)
     val_ds = SequenceDataset(X_val, y_val, groups_val)
@@ -247,7 +292,9 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         pin_memory=torch.cuda.is_available(),
     )
-    eval_batch_size = min(args.batch_size * 2, len(val_ds)) if len(val_ds) > 0 else args.batch_size
+    eval_batch_size = (
+        min(args.batch_size * 2, len(val_ds)) if len(val_ds) > 0 else args.batch_size
+    )
     train_eval_batch_size = min(args.batch_size * 2, len(train_ds))
     train_eval_loader = DataLoader(
         train_ds,
@@ -281,38 +328,43 @@ if __name__ == "__main__":
 
     pos_count = y_tr.sum()
     neg_count = len(y_tr) - pos_count
-    if pos_count == 0:
-        raise ValueError("Training fold contains no positive examples.")
-    pos_weight = torch.tensor([neg_count / pos_count], device=device, dtype=torch.float32)
+    if pos_count == 0 or neg_count == 0:
+        raise ValueError(
+            "Training fold must contain both positive and negative examples."
+        )
+    pos_weight = torch.tensor(
+        [neg_count / pos_count], device=device, dtype=torch.float32
+    )
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
+    wandb_run = maybe_init_wandb(
+        args,
+        run_name,
+        model_store,
+        channels,
+        groups_tr,
+        groups_val,
+        test_groups,
+        train_ds,
+        val_ds,
+        test_ds,
+    )
 
-    wandb_kwargs = {
-        "project": args.wandb_project,
-        "name": f"{args.model}_{run_name}",
-        "config": {
-            **vars(args),
-            "channels": channels,
-            "train_windows": int(len(train_ds)),
-            "val_windows": int(len(val_ds)),
-            "test_windows": int(len(test_ds)),
-            "train_patients": int(np.unique(groups_tr).shape[0]),
-            "val_patients": int(np.unique(groups_val).shape[0]),
-            "test_patients": int(np.unique(test_groups).shape[0]),
-        },
-        "mode": "disabled" if args.wandb_mode == "disabled" else args.wandb_mode,
-        "dir": model_store,
-    }
-    if args.wandb_entity:
-        wandb_kwargs["entity"] = args.wandb_entity
-    wandb.init(**wandb_kwargs)
+    monitor_name = args.monitor
+    if np.unique(y_val).shape[0] < 2 and monitor_name in {"val_auc", "val_patient_auc"}:
+        warnings.warn(
+            f"Validation fold has a single class; switching monitor from {monitor_name} "
+            "to val_loss.",
+            stacklevel=2,
+        )
+        monitor_name = "val_loss"
 
     history = []
-    best_metric = -np.inf if args.monitor != "val_loss" else np.inf
+    best_metric = -np.inf if monitor_name != "val_loss" else np.inf
     best_epoch = -1
     epochs_without_improvement = 0
     best_path = os.path.join(model_store, f"{args.model}_best.pt")
@@ -348,10 +400,12 @@ if __name__ == "__main__":
             "lr": optimizer.param_groups[0]["lr"],
         }
         history.append(row)
-        wandb.log(row, step=epoch)
+        if wandb_run is not None:
+            wandb.log(row, step=epoch)
 
-        current_metric = row[args.monitor]
-        improved = current_metric < best_metric if args.monitor == "val_loss" else current_metric > best_metric
+        maximize = monitor_name != "val_loss"
+        current_metric = metric_or_default(row[monitor_name], maximize=maximize)
+        improved = current_metric < best_metric if monitor_name == "val_loss" else current_metric > best_metric
         if improved or best_epoch == -1:
             best_metric = current_metric
             best_epoch = epoch
@@ -363,6 +417,7 @@ if __name__ == "__main__":
                     "channels": channels,
                     "best_epoch": best_epoch,
                     "best_metric": best_metric,
+                    "monitor": monitor_name,
                 },
                 best_path,
             )
@@ -382,43 +437,44 @@ if __name__ == "__main__":
     summary = {
         "best_epoch": best_epoch,
         "best_metric": best_metric,
-        "monitor": args.monitor,
+        "monitor": monitor_name,
         "train": train_metrics,
         "val": val_metrics,
         "test": test_metrics,
     }
 
-    pd.DataFrame(history).to_csv(
-        os.path.join(model_store, f"{args.model}_history.csv"), index=False
-    )
-    save_json(os.path.join(model_store, f"{args.model}_summary.json"), summary)
+    history_path = os.path.join(model_store, f"{args.model}_history.csv")
+    summary_path = os.path.join(model_store, f"{args.model}_summary.json")
+    history_df = pd.DataFrame(history)
+    history_df.to_csv(history_path, index=False)
+    save_json(summary_path, summary)
 
-    wandb.summary.update(
-        {
-            "best_epoch": best_epoch,
-            "best_metric": best_metric,
-            "final_train_auc": train_metrics["auc"],
-            "final_val_auc": val_metrics["auc"],
-            "final_val_patient_auc": val_metrics["patient_auc"],
-            "final_test_auc": test_metrics["auc"],
-            "final_test_patient_auc": test_metrics["patient_auc"],
-        }
-    )
-    if args.wandb_mode != "disabled":
+    if wandb_run is not None:
+        wandb.summary.update(
+            {
+                "best_epoch": best_epoch,
+                "best_metric": best_metric,
+                "final_train_auc": train_metrics["auc"],
+                "final_val_auc": val_metrics["auc"],
+                "final_val_patient_auc": val_metrics["patient_auc"],
+                "final_test_auc": test_metrics["auc"],
+                "final_test_patient_auc": test_metrics["patient_auc"],
+            }
+        )
         artifact = wandb.Artifact(
             name=f"{args.model}_{run_name}",
             type="model",
             metadata={
                 "train_dir": args.train_dir,
-                "monitor": args.monitor,
+                "monitor": monitor_name,
                 "best_epoch": best_epoch,
             },
         )
         artifact.add_file(best_path)
-        artifact.add_file(os.path.join(model_store, f"{args.model}_history.csv"))
-        artifact.add_file(os.path.join(model_store, f"{args.model}_summary.json"))
+        artifact.add_file(history_path)
+        artifact.add_file(summary_path)
         wandb.log_artifact(artifact)
-    wandb.finish()
+        wandb.finish()
 
     print(f"Saved deep model artifacts to {model_store}")
     print(json.dumps(summary, indent=2, sort_keys=True))
