@@ -1,3 +1,10 @@
+"""Dataset loading helpers for deep recurrent models.
+
+The rest of the repository stores windows as flattened feature vectors. This
+module validates those arrays, reshapes them back to multivariate sequences,
+and prepares patient-level grouping utilities for training and evaluation.
+"""
+
 import os
 import warnings
 
@@ -10,6 +17,8 @@ from torch.utils.data import Dataset, WeightedRandomSampler
 
 
 class SequenceDataset(Dataset):
+    """Torch dataset wrapper for precomputed sequence windows."""
+
     def __init__(self, X, y, groups):
         self.X = torch.from_numpy(np.asarray(X, dtype=np.float32))
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -23,12 +32,14 @@ class SequenceDataset(Dataset):
 
 
 def infer_base_ptid(labels):
+    """Return the patient identifier used for grouped splitting/evaluation."""
     if "base_ptid" in labels.columns:
         return labels["base_ptid"].astype(str).to_numpy()
     return labels["ptid"].astype(str).str.split("_").str[0].to_numpy()
 
 
 def parse_channels_from_train_dir(train_dir):
+    """Infer channel order from the dataset directory naming convention."""
     train_dir_name = os.path.basename(train_dir.rstrip("/"))
     train_params = train_dir_name.split("_")
 
@@ -47,6 +58,7 @@ def parse_channels_from_train_dir(train_dir):
 
 
 def reshape_flat_windows(X, num_channels):
+    """Convert flattened windows into ``[n_samples, timesteps, channels]``."""
     if X.shape[1] % num_channels != 0:
         raise ValueError(
             f"Input width {X.shape[1]} is not divisible by num_channels={num_channels}."
@@ -54,10 +66,16 @@ def reshape_flat_windows(X, num_channels):
 
     timesteps = X.shape[1] // num_channels
     X = X.reshape(X.shape[0], num_channels, timesteps)
+    # The recurrent models expect time-major ordering per sample.
     return np.transpose(X, (0, 2, 1))
 
 
 def load_split_arrays(train_dir, split, data_mode="raw"):
+    """Load one repository split and reshape it into recurrent-model input.
+
+    Returns feature tensors, binary labels, base-patient groups, the filtered
+    labels dataframe, and inferred channel names.
+    """
     if data_mode != "raw":
         raise ValueError("Deep recurrent models currently support only raw windows.")
 
@@ -76,6 +94,8 @@ def load_split_arrays(train_dir, split, data_mode="raw"):
             f"for split `{split}`."
         )
 
+    # Drop invalid or missing labels before any reshaping so downstream tensor
+    # dimensions stay aligned with the filtered dataframe.
     valid_mask = labels["in?"].notna().to_numpy()
     if "invalid" in labels.columns:
         valid_mask &= ~labels["invalid"].astype(bool).to_numpy()
@@ -97,6 +117,11 @@ def load_split_arrays(train_dir, split, data_mode="raw"):
 
 
 def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0):
+    """Build one grouped train/validation split.
+
+    Stratified grouping is preferred, but the helper falls back to ``GroupKFold``
+    when the label/group layout is too constrained to stratify safely.
+    """
     groups = np.asarray(groups).astype(str)
     unique_groups = np.unique(groups)
     if unique_groups.shape[0] < 2:
@@ -133,6 +158,7 @@ def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0):
 
 
 def make_patient_weights(groups):
+    """Assign each window inverse-frequency weight within its patient."""
     groups = np.asarray(groups).astype(str)
     if groups.size == 0:
         return np.array([], dtype=np.float64)
@@ -143,6 +169,7 @@ def make_patient_weights(groups):
 
 
 def build_weighted_sampler(groups):
+    """Create a replacement sampler that equalizes patient contribution."""
     if len(groups) == 0:
         raise ValueError("Cannot build a weighted sampler with no groups.")
     weights = torch.tensor(make_patient_weights(groups), dtype=torch.double)

@@ -1,3 +1,12 @@
+"""CLI training loop for recurrent sequence models.
+
+The script mirrors the rest of the repository's training entrypoints:
+- load windows from ``permanent/train`` and ``permanent/test``
+- derive a grouped validation split from the training partition
+- train a recurrent binary classifier with optional patient-balanced sampling
+- save checkpoints, CSV history, JSON summary, and W&B artifacts
+"""
+
 import json
 import os
 import random
@@ -30,6 +39,7 @@ from deep.models import GRUClassifier, LSTMClassifier  # noqa: E402
 
 
 def seed_everything(seed):
+    """Seed Python, NumPy, and Torch RNGs for reproducible runs."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -38,6 +48,7 @@ def seed_everything(seed):
 
 
 def make_model(args, input_dim):
+    """Instantiate the requested recurrent classifier from CLI args."""
     if args.model == "lstm":
         return LSTMClassifier(
             input_dim=input_dim,
@@ -58,12 +69,14 @@ def make_model(args, input_dim):
 
 
 def get_device(requested):
+    """Resolve the torch device from a CLI string."""
     if requested == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return torch.device(requested)
 
 
 def logits_to_predictions(logits):
+    """Convert logits to probabilities and hard predictions."""
     logits = np.asarray(logits, dtype=np.float64)
     probs = torch.sigmoid(torch.from_numpy(logits)).numpy()
     preds = (probs >= 0.5).astype(int)
@@ -71,12 +84,14 @@ def logits_to_predictions(logits):
 
 
 def metric_or_default(value, maximize):
+    """Map ``NaN`` monitor values to deterministic worst-case sentinels."""
     if np.isnan(value):
         return -np.inf if maximize else np.inf
     return value
 
 
 def compute_metrics(loss, y_true, y_prob, y_pred, groups):
+    """Compute window-level and patient-balanced binary classification metrics."""
     if y_true.size == 0:
         return {
             "loss": float(loss),
@@ -110,6 +125,7 @@ def compute_metrics(loss, y_true, y_prob, y_pred, groups):
 
 
 def evaluate(model, dataloader, criterion, device, groups):
+    """Evaluate a model over one dataloader and return aggregate metrics."""
     model.eval()
     total_loss = 0.0
     total_examples = 0
@@ -129,7 +145,9 @@ def evaluate(model, dataloader, criterion, device, groups):
 
     avg_loss = total_loss / max(total_examples, 1)
     if total_examples == 0:
-        return compute_metrics(avg_loss, np.array([], dtype=int), np.array([]), np.array([]), groups)
+        return compute_metrics(
+            avg_loss, np.array([], dtype=int), np.array([]), np.array([]), groups
+        )
 
     logits = torch.cat(all_logits).numpy()
     y_true = torch.cat(all_targets).numpy().astype(int)
@@ -138,6 +156,7 @@ def evaluate(model, dataloader, criterion, device, groups):
 
 
 def train_one_epoch(model, dataloader, criterion, optimizer, device, grad_clip):
+    """Run one optimization epoch and return mean training loss."""
     model.train()
     total_loss = 0.0
     total_examples = 0
@@ -161,11 +180,24 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, grad_clip):
 
 
 def save_json(path, payload):
+    """Write a JSON payload with stable formatting for later review."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, sort_keys=True)
 
 
-def maybe_init_wandb(args, run_name, model_store, channels, groups_tr, groups_val, test_groups, train_ds, val_ds, test_ds):
+def maybe_init_wandb(
+    args,
+    run_name,
+    model_store,
+    channels,
+    groups_tr,
+    groups_val,
+    test_groups,
+    train_ds,
+    val_ds,
+    test_ds,
+):
+    """Initialize W&B unless logging has been explicitly disabled."""
     if args.wandb_mode == "disabled":
         return None
 
@@ -284,6 +316,8 @@ if __name__ == "__main__":
         train_sampler = build_weighted_sampler(groups_tr)
         shuffle = False
 
+    # Training may use replacement sampling, but train metrics should be
+    # computed on the full underlying training fold rather than sampled batches.
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
@@ -405,11 +439,17 @@ if __name__ == "__main__":
 
         maximize = monitor_name != "val_loss"
         current_metric = metric_or_default(row[monitor_name], maximize=maximize)
-        improved = current_metric < best_metric if monitor_name == "val_loss" else current_metric > best_metric
+        improved = (
+            current_metric < best_metric
+            if monitor_name == "val_loss"
+            else current_metric > best_metric
+        )
         if improved or best_epoch == -1:
             best_metric = current_metric
             best_epoch = epoch
             epochs_without_improvement = 0
+            # The checkpoint stores enough metadata to reload the exact trained
+            # model configuration without relying on the W&B run state.
             torch.save(
                 {
                     "model_state_dict": model.state_dict(),

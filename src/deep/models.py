@@ -1,8 +1,16 @@
+"""Recurrent neural network classifiers used by the deep training CLI."""
+
 import torch
 from torch import nn
 
 
 class RecurrentClassifier(nn.Module):
+    """Shared recurrent backbone with a small classification head.
+
+    The model consumes tensors shaped ``[batch, timesteps, channels]`` and
+    predicts a single logit for binary classification.
+    """
+
     def __init__(
         self,
         input_dim,
@@ -32,10 +40,13 @@ class RecurrentClassifier(nn.Module):
         )
 
     def forward(self, x):
+        """Return logits for a batch of sequence windows."""
         _, hidden = self.rnn(x)
         if isinstance(hidden, tuple):
             hidden = hidden[0]
 
+        # Use the final hidden state from the last recurrent layer. For
+        # bidirectional models we concatenate the last forward/backward states.
         if self.rnn.bidirectional:
             final_hidden = torch.cat([hidden[-2], hidden[-1]], dim=1)
         else:
@@ -47,6 +58,8 @@ class RecurrentClassifier(nn.Module):
 
 
 class LSTMClassifier(RecurrentClassifier):
+    """Binary classifier backed by an ``nn.LSTM`` encoder."""
+
     def __init__(
         self,
         input_dim,
@@ -66,6 +79,8 @@ class LSTMClassifier(RecurrentClassifier):
 
 
 class GRUClassifier(RecurrentClassifier):
+    """Binary classifier backed by an ``nn.GRU`` encoder."""
+
     def __init__(
         self,
         input_dim,
