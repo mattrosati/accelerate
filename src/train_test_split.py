@@ -19,6 +19,7 @@ from sklearn.model_selection import train_test_split
 
 
 def make_qcut_codes(series, q=3):
+    """Return stable quantile-bin codes even when the series has few uniques."""
     bins = min(q, series.nunique())
     if bins <= 1:
         return pd.Series(np.zeros(series.shape[0], dtype=int), index=series.index)
@@ -101,6 +102,8 @@ if __name__ == "__main__":
         if weights.sum() == 0:
             weights = np.ones(group.shape[0], dtype=float)
 
+        # Aggregate multipart recordings to one row so splitting happens at the
+        # true patient level rather than the file level.
         patient_rows.append(
             {
                 "base_ptid": base_ptid,

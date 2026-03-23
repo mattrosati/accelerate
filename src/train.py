@@ -172,6 +172,7 @@ if __name__ == "__main__":
     if "base_ptid" in labels.columns:
         groups = labels["base_ptid"].astype(str)
     else:
+        # Older extracted datasets do not have an explicit base patient column.
         groups = labels["ptid"].astype(str).str.split("_").str[0]
 
     ray.init(
@@ -360,6 +361,8 @@ if __name__ == "__main__":
         if args.patient_balance in ["weight", "subsample"]
         else "mean_val_auc"
     )
+    # When balancing is enabled, rank models by patient-balanced validation AUC
+    # so hyperparameter search optimizes the same objective the weighting changes.
     search = RayAdaptiveRepeatedCVSearch(
         estimator=model,
         search_space=params,

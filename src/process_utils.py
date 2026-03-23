@@ -592,6 +592,8 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 df["datetime"] = np.array(labels["DateTime"])
                 df["in?"] = in_out
                 df["ptid"] = ptid
+                # Persist both the file id and the underlying patient id so
+                # downstream grouped CV can keep multipart recordings together.
                 df["base_ptid"] = ptid.split("_")[0]
                 df["invalid"] = df["in?"].isna()
 

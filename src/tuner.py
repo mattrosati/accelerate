@@ -26,6 +26,7 @@ warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning
 
 
 def make_patient_weights(groups):
+    """Give each patient the same total weight across its windows."""
     groups = np.asarray(groups)
     unique_groups, counts = np.unique(groups, return_counts=True)
     count_map = dict(zip(unique_groups, counts))
@@ -34,6 +35,7 @@ def make_patient_weights(groups):
 
 
 def subsample_by_patient(indices, groups, max_windows_per_patient, rng):
+    """Cap the number of windows contributed by each patient in one fold."""
     indices = np.asarray(indices)
     groups = np.asarray(groups)
     selected = []
@@ -52,6 +54,7 @@ def subsample_by_patient(indices, groups, max_windows_per_patient, rng):
 
 
 def get_fit_kwargs(model, sample_weight):
+    """Route sample weights to the estimator, including pipeline-wrapped models."""
     if isinstance(model, Pipeline):
         step_name, step_estimator = model.steps[-1]
         if has_fit_parameter(step_estimator, "sample_weight"):
@@ -65,6 +68,7 @@ def get_fit_kwargs(model, sample_weight):
 
 
 def predict_scores(model, X):
+    """Return continuous scores and the matching hard-decision threshold."""
     if hasattr(model, "predict_proba"):
         scores = model.predict_proba(X)
         if scores.ndim == 2:
@@ -81,6 +85,7 @@ def predict_scores(model, X):
 
 
 def compute_patient_balanced_metrics(model, X, y, groups):
+    """Compute validation metrics under equal patient contribution."""
     weights = make_patient_weights(groups)
     scores, threshold = predict_scores(model, X)
     y_pred = (scores >= threshold).astype(int)
@@ -109,6 +114,7 @@ def train_cv(
     balance_mode,
     max_windows_per_patient,
 ):
+    """Train one hyperparameter trial across all prepared CV folds."""
 
     summary = {}
     metrics = {}
@@ -124,6 +130,7 @@ def train_cv(
     for fold_idx, (train_idx, val_idx) in enumerate(folds):
         fit_train_idx = train_idx
         if balance_mode == "subsample":
+            # Keep validation untouched; only the fitting subset is balanced.
             rng = np.random.default_rng(42 + fold_idx)
             fit_train_idx = subsample_by_patient(
                 train_idx, groups, max_windows_per_patient, rng
@@ -326,6 +333,8 @@ class RayAdaptiveRepeatedCVSearch:
         if fit_groups is not None and not isinstance(fit_groups, np.ndarray):
             fit_groups = fit_groups.to_numpy()
         if fit_groups is not None and self.balance_mode == "subsample":
+            # Apply the same balancing policy used in CV before fitting the
+            # persisted final estimator.
             full_idx = subsample_by_patient(
                 np.arange(len(y)),
                 fit_groups,

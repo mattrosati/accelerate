@@ -18,6 +18,7 @@ from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 
 
 def make_patient_weights(groups):
+    """Give each patient equal total influence in evaluation metrics."""
     groups = np.asarray(groups)
     unique_groups, counts = np.unique(groups, return_counts=True)
     count_map = dict(zip(unique_groups, counts))
@@ -26,6 +27,7 @@ def make_patient_weights(groups):
 
 
 def predict_scores(estimator, X):
+    """Return probability-like scores and hard predictions for one estimator."""
     if hasattr(estimator, "predict_proba"):
         y_prob = estimator.predict_proba(X)[:, 1]
         y_pred = (y_prob >= 0.5).astype(int)
@@ -98,6 +100,8 @@ if __name__ == "__main__":
         if "base_ptid" in labels.columns:
             groups = labels["base_ptid"].astype(str).to_numpy()
         else:
+            # Keep evaluation compatible with datasets generated before the
+            # explicit base patient id column was added.
             groups = labels["ptid"].astype(str).str.split("_").str[0].to_numpy()
         patient_weights = make_patient_weights(groups)
 
@@ -205,6 +209,7 @@ if __name__ == "__main__":
         sort_col = (
             "mean_val_patient_auc" if "mean_val_patient_auc" in df.columns else "mean_val_auc"
         )
+        # Prefer the patient-balanced validation metric when it is available.
         df = df.sort_values(sort_col, ascending=False)
 
         # save as csv
