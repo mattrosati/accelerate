@@ -23,3 +23,4 @@ DIR="/home/mr2238/scratch_pi_np442/mr2238/accelerate/${MODE}"
 
 python -u src/data_extract.py -t chronos -o -z --top_dir "$DIR" $PARAMS
 
+sleep 3m

@@ -23,6 +23,8 @@ DIR="/home/mr2238/scratch_pi_np442/mr2238/accelerate/${MODE}"
 python -u src/data_extract.py $PARAMS -t pca separate_pca -o -z --top_dir "$DIR"
 
 # get the dataset directory name
+CPU_LOG=$(echo "$CPU_LOG" | sed -n "s/%a/$SLURM_ARRAY_TASK_ID/p")
+echo "CPU log file: $CPU_LOG"
 DATASET_DIR=$(sed -n 's/^DATASET_NAME=//p' "$CPU_LOG" | tail -n 1)
 echo "Dataset dir: $DATASET_DIR"
 
