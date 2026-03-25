@@ -236,7 +236,7 @@ if __name__ == "__main__":
         )
         params = {
             "penalty": tune.choice(["l2", "l1"]),
-            "C": tune.loguniform(0.001, 100),
+            "C": tune.loguniform(1e-5, 100),
         }
     elif args.model == "decision_tree":
         model = DecisionTreeClassifier()
@@ -251,21 +251,21 @@ if __name__ == "__main__":
     elif args.model == "svm":
         model = svm.SVC()
         params = {
-            "C": tune.loguniform(0.001, 100),
-            "gamma": tune.loguniform(1e-3, 1e1),
+            "C": tune.loguniform(1e-5, 100),
+            "gamma": tune.loguniform(1e-5, 1e1),
         }
     elif args.model == "knn":
         model = KNeighborsClassifier(n_jobs=1)
         params = {
-            "n_neighbors": tune.lograndint(5, 1_000),
+            "n_neighbors": tune.lograndint(2, 1_000),
             "weights": tune.choice(["uniform", "distance"]),
         }
     elif args.model == "rand_forest":
         model = RandomForestClassifier()
         params = {
             "n_estimators": tune.lograndint(10, 150),
-            "max_depth": tune.qrandint(5, 30, 5),
-            "max_features": tune.choice([0.005, 0.02, 0.05, "sqrt"]),
+            "max_depth": tune.qrandint(2, 30, 2),
+            "max_features": tune.choice([1e-3, 0.005, 0.02, 0.05, 0.1, "sqrt"]),
             "min_samples_split": tune.randint(15, 100),
             "min_samples_leaf": tune.randint(10, 50),
             "class_weight": "balanced",
@@ -274,9 +274,9 @@ if __name__ == "__main__":
     elif args.model == "xgb":
         model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
         params = {
-            "n_estimators": tune.lograndint(10, 150),
+            "n_estimators": tune.lograndint(10, 400),
             "max_depth": tune.randint(2, 10),
-            "learning_rate": tune.loguniform(1e-3, 1.0),
+            "learning_rate": tune.loguniform(1e-5, 1.0),
             "subsample": tune.quniform(0.5, 0.9, 0.05),
             "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
             "gamma": tune.quniform(0.5, 10, 0.25),
@@ -291,7 +291,7 @@ if __name__ == "__main__":
             "n_kernels": tune.choice([1_000, 2_500, 5_000]),
             "max_dilations_per_kernel": tune.choice([8, 16]),
             "n_features_per_kernel": tune.qrandint(4, 10, 2),
-            "estimator__alpha": tune.loguniform(1e-1, 1e5),  # Ridge reg
+            "estimator__alpha": tune.loguniform(1e-3, 1e5),  # Ridge reg
             "class_weight": "balanced",
         }
         model = MultiRocketClassifier(estimator=RidgeClassifier())
@@ -349,7 +349,7 @@ if __name__ == "__main__":
         print("Selecting variables based on PMI")
         fs = SelectPercentile(score_func=mutual_info_classif)
         params = {f"m__{k}": v for k, v in params.items()}
-        params["pmi__percentile"] = tune.qrandint(10, 60, 10)
+        params["pmi__percentile"] = tune.qrandint(2, 60, 5)
         model = Pipeline(steps=[("pmi", fs), ("m", model)])
         n_iter += 5
 
