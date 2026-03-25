@@ -8,6 +8,7 @@ checkpointing, and W&B logging paths.
 import json
 import os
 import random
+import re
 import sys
 import warnings
 from argparse import ArgumentParser, Namespace
@@ -360,6 +361,13 @@ def load_data_bundle(train_dir, data_mode, target_col):
         "test_groups": test_groups,
         "channels": channels,
     }
+
+
+def sanitize_wandb_artifact_name(value):
+    """Return an artifact-safe name for W&B logging."""
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", value)
+    sanitized = sanitized.strip("-.")
+    return sanitized or "artifact"
 
 
 def maybe_init_wandb(
@@ -787,7 +795,7 @@ def run_training(args, data_bundle=None, print_summary=True):
                 }
             )
         artifact = wandb.Artifact(
-            name=f"{args.model}_{run_name}",
+            name=sanitize_wandb_artifact_name(f"{args.model}_{run_name}"),
             type="model",
             metadata={
                 "train_dir": args.train_dir,
