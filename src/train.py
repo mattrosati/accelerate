@@ -408,6 +408,16 @@ if __name__ == "__main__":
     # train
     search = search.fit(X_train, y_train, groups=groups)
 
+    with pd.option_context(
+        "display.max_columns",
+        16,
+        "display.width",
+        None,
+        "display.max_colwidth",
+        None,
+    ):
+        print(search.cv_results_())
+
     # save model
     dump(
         search.best_estimator_,
