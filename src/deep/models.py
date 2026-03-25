@@ -4,12 +4,12 @@ import torch
 from torch import nn
 
 
-class RecurrentClassifier(nn.Module):
-    """Shared recurrent backbone with a small scalar prediction head.
+class RecurrentPredictor(nn.Module):
+    """Shared recurrent backbone with a scalar prediction head.
 
     The model consumes tensors shaped ``[batch, timesteps, channels]`` and
-    predicts one score per window. The training task decides whether that
-    score is interpreted as a classification logit or a regression output.
+    predicts one score per window. The task decides whether that score is a
+    classification logit or a regression output.
     """
 
     def __init__(
@@ -20,8 +20,11 @@ class RecurrentClassifier(nn.Module):
         dropout,
         bidirectional,
         rnn_type,
+        task="classification",
+        pos_weight=None,
     ):
         super().__init__()
+        self.task = task
         recurrent_dropout = dropout if num_layers > 1 else 0.0
         self.rnn = rnn_type(
             input_size=input_dim,
@@ -39,8 +42,15 @@ class RecurrentClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(output_dim, 1),
         )
+        if pos_weight is None:
+            self.register_buffer("pos_weight", None)
+        else:
+            self.register_buffer(
+                "pos_weight",
+                torch.tensor([float(pos_weight)], dtype=torch.float32),
+            )
 
-    def forward(self, x):
+    def _forward_logits(self, x):
         """Return one scalar prediction for each sequence window."""
         _, hidden = self.rnn(x)
         if isinstance(hidden, tuple):
@@ -57,8 +67,30 @@ class RecurrentClassifier(nn.Module):
         logits = self.head(final_hidden).squeeze(-1)
         return logits
 
+    def forward(self, features=None, labels=None, x=None):
+        """Support both Trainer-style dict inputs and direct tensor calls."""
+        if features is None:
+            features = x
+        if features is None:
+            raise ValueError("Expected `features` or `x` input for recurrent model.")
 
-class LSTMClassifier(RecurrentClassifier):
+        logits = self._forward_logits(features)
+        if labels is None:
+            return logits
+
+        labels = labels.to(logits.dtype)
+        if self.task == "classification":
+            loss_fn = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
+        else:
+            loss_fn = nn.MSELoss()
+
+        return {
+            "loss": loss_fn(logits, labels),
+            "logits": logits,
+        }
+
+
+class LSTMClassifier(RecurrentPredictor):
     """LSTM-backed recurrent predictor."""
 
     def __init__(
@@ -68,6 +100,8 @@ class LSTMClassifier(RecurrentClassifier):
         num_layers=2,
         dropout=0.2,
         bidirectional=False,
+        task="classification",
+        pos_weight=None,
     ):
         super().__init__(
             input_dim=input_dim,
@@ -76,10 +110,12 @@ class LSTMClassifier(RecurrentClassifier):
             dropout=dropout,
             bidirectional=bidirectional,
             rnn_type=nn.LSTM,
+            task=task,
+            pos_weight=pos_weight,
         )
 
 
-class GRUClassifier(RecurrentClassifier):
+class GRUClassifier(RecurrentPredictor):
     """GRU-backed recurrent predictor."""
 
     def __init__(
@@ -89,6 +125,8 @@ class GRUClassifier(RecurrentClassifier):
         num_layers=2,
         dropout=0.2,
         bidirectional=False,
+        task="classification",
+        pos_weight=None,
     ):
         super().__init__(
             input_dim=input_dim,
@@ -97,4 +135,6 @@ class GRUClassifier(RecurrentClassifier):
             dropout=dropout,
             bidirectional=bidirectional,
             rnn_type=nn.GRU,
+            task=task,
+            pos_weight=pos_weight,
         )

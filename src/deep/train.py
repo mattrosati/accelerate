@@ -14,7 +14,6 @@ import warnings
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
-from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -27,15 +26,14 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
-from torch import nn
-from torch.utils.data import DataLoader
+from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from deep.data import (  # noqa: E402
-    SequenceDataset,
+    build_hf_dataset,
     build_weighted_sampler,
     load_split_arrays,
     make_grouped_split,
@@ -122,6 +120,18 @@ def build_parser(add_help=True):
         ],
         default="val_patient_auc",
     )
+    parser.add_argument(
+        "--lr_scheduler_type",
+        type=str,
+        default="linear",
+        help="Trainer scheduler type passed through to Hugging Face TrainingArguments.",
+    )
+    parser.add_argument(
+        "--warmup_ratio",
+        type=float,
+        default=0.0,
+        help="Optional warmup ratio for the Trainer-managed scheduler.",
+    )
     parser.add_argument("--wandb_project", type=str, default="accelerate-deep")
     parser.add_argument("--wandb_entity", type=str, default="")
     parser.add_argument("--wandb_group", type=str, default="")
@@ -145,32 +155,39 @@ def seed_everything(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def make_model(args, input_dim):
-    """Instantiate the requested recurrent predictor from CLI args."""
-    if args.model == "lstm":
-        return LSTMClassifier(
-            input_dim=input_dim,
-            hidden_dim=args.hidden_dim,
-            num_layers=args.num_layers,
-            dropout=args.dropout,
-            bidirectional=args.bidirectional,
-        )
-    if args.model == "gru":
-        return GRUClassifier(
-            input_dim=input_dim,
-            hidden_dim=args.hidden_dim,
-            num_layers=args.num_layers,
-            dropout=args.dropout,
-            bidirectional=args.bidirectional,
-        )
-    raise ValueError(f"Unsupported model: {args.model}")
-
-
-def get_device(requested):
-    """Resolve the torch device from a CLI string."""
+def configure_runtime_device(requested):
+    """Apply the requested runtime device configuration for Trainer."""
     if requested == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(requested)
+        return False
+
+    device = torch.device(requested)
+    if device.type == "cpu":
+        return True
+    if device.type != "cuda":
+        raise ValueError(f"Unsupported device type for Trainer: {requested}")
+    if not torch.cuda.is_available():
+        raise ValueError(f"CUDA device requested but no GPU is available: {requested}")
+
+    torch.cuda.set_device(device)
+    return False
+
+
+def make_model(args, input_dim, pos_weight=None):
+    """Instantiate the requested recurrent predictor from CLI args."""
+    kwargs = {
+        "input_dim": input_dim,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
+        "dropout": args.dropout,
+        "bidirectional": args.bidirectional,
+        "task": args.task,
+        "pos_weight": pos_weight,
+    }
+    if args.model == "lstm":
+        return LSTMClassifier(**kwargs)
+    if args.model == "gru":
+        return GRUClassifier(**kwargs)
+    raise ValueError(f"Unsupported model: {args.model}")
 
 
 def logits_to_predictions(logits):
@@ -278,72 +295,6 @@ def get_regression_target_stats(y_train):
     return {"mean": mean, "std": std}
 
 
-def evaluate(model, dataloader, criterion, device, groups, task, target_stats=None):
-    """Evaluate a model over one dataloader and return aggregate metrics."""
-    model.eval()
-    total_loss = 0.0
-    total_examples = 0
-    all_logits = []
-    all_targets = []
-
-    with torch.no_grad():
-        for X_batch, y_batch in dataloader:
-            X_batch = X_batch.to(device)
-            y_batch = y_batch.to(device)
-            logits = model(X_batch)
-            loss = criterion(logits, y_batch)
-            total_loss += loss.item() * X_batch.shape[0]
-            total_examples += X_batch.shape[0]
-            all_logits.append(logits.cpu())
-            all_targets.append(y_batch.cpu())
-
-    avg_loss = total_loss / max(total_examples, 1)
-    if total_examples == 0:
-        if task == "classification":
-            return compute_metrics(
-                avg_loss, np.array([], dtype=int), np.array([]), np.array([]), groups
-            )
-        return compute_regression_metrics(avg_loss, np.array([]), np.array([]), groups)
-
-    logits = torch.cat(all_logits).numpy()
-    y_true = torch.cat(all_targets).numpy()
-
-    if task == "classification":
-        y_true = y_true.astype(int)
-        y_prob, y_pred = logits_to_predictions(logits)
-        return compute_metrics(avg_loss, y_true, y_prob, y_pred, groups)
-
-    y_pred = logits
-    if target_stats is not None:
-        y_pred = y_pred * target_stats["std"] + target_stats["mean"]
-        y_true = y_true * target_stats["std"] + target_stats["mean"]
-    return compute_regression_metrics(avg_loss, y_true, y_pred, groups)
-
-
-def train_one_epoch(model, dataloader, criterion, optimizer, device, grad_clip):
-    """Run one optimization epoch and return mean training loss."""
-    model.train()
-    total_loss = 0.0
-    total_examples = 0
-
-    for X_batch, y_batch in dataloader:
-        X_batch = X_batch.to(device)
-        y_batch = y_batch.to(device)
-
-        optimizer.zero_grad(set_to_none=True)
-        logits = model(X_batch)
-        loss = criterion(logits, y_batch)
-        loss.backward()
-        if grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-        optimizer.step()
-
-        total_loss += loss.item() * X_batch.shape[0]
-        total_examples += X_batch.shape[0]
-
-    return total_loss / max(total_examples, 1)
-
-
 def save_json(path, payload):
     """Write a JSON payload with stable formatting for later review."""
     with open(path, "w", encoding="utf-8") as f:
@@ -420,65 +371,210 @@ def maybe_init_wandb(
     return wandb.init(**wandb_kwargs)
 
 
-def _make_dataloaders(
-    args, X_tr, y_tr, groups_tr, X_val, y_val, groups_val, test_X, test_y, test_groups
-):
-    """Build train/validation/test dataloaders for one grouped split."""
-    train_ds = SequenceDataset(X_tr, y_tr, groups_tr)
-    val_ds = SequenceDataset(X_val, y_val, groups_val)
-    test_ds = SequenceDataset(test_X, test_y, test_groups)
+class GroupAwareMetricsComputer:
+    """Compute metrics for Trainer while preserving patient grouping."""
 
-    train_sampler = None
-    shuffle = True
-    if args.patient_balance == "sampler":
-        train_sampler = build_weighted_sampler(groups_tr)
-        shuffle = False
+    def __init__(self, task, target_stats=None):
+        self.task = task
+        self.target_stats = target_stats
+        self.groups = np.array([], dtype=str)
 
-    # Training may use replacement sampling, but train metrics should be
-    # computed on the full underlying training fold rather than sampled batches.
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        sampler=train_sampler,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
-    eval_batch_size = (
-        min(args.batch_size * 2, len(val_ds)) if len(val_ds) > 0 else args.batch_size
-    )
-    train_eval_batch_size = min(args.batch_size * 2, len(train_ds))
-    train_eval_loader = DataLoader(
-        train_ds,
-        batch_size=max(train_eval_batch_size, 1),
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=max(eval_batch_size, 1),
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
-    test_eval_batch_size = min(args.batch_size * 2, len(test_ds))
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=max(test_eval_batch_size, 1),
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
+    def set_groups(self, groups):
+        """Swap in the group labels for the next evaluation call."""
+        self.groups = np.asarray(groups).astype(str)
 
-    return (
-        train_ds,
-        val_ds,
-        test_ds,
-        train_loader,
-        train_eval_loader,
-        val_loader,
-        test_loader,
+    def __call__(self, eval_pred):
+        predictions = eval_pred.predictions
+        if isinstance(predictions, tuple):
+            predictions = predictions[0]
+        predictions = np.asarray(predictions)
+        if predictions.ndim > 1 and predictions.shape[-1] == 1:
+            predictions = predictions.squeeze(-1)
+
+        labels = np.asarray(eval_pred.label_ids)
+        if labels.ndim > 1 and labels.shape[-1] == 1:
+            labels = labels.squeeze(-1)
+
+        if self.task == "classification":
+            y_true = labels.astype(int)
+            y_prob, y_pred = logits_to_predictions(predictions)
+            metrics = compute_metrics(np.nan, y_true, y_prob, y_pred, self.groups)
+        else:
+            y_true = labels.astype(np.float64)
+            y_pred = predictions.astype(np.float64)
+            if self.target_stats is not None:
+                y_true = y_true * self.target_stats["std"] + self.target_stats["mean"]
+                y_pred = y_pred * self.target_stats["std"] + self.target_stats["mean"]
+            metrics = compute_regression_metrics(np.nan, y_true, y_pred, self.groups)
+
+        metrics.pop("loss", None)
+        return metrics
+
+
+class PatientBalancedTrainer(Trainer):
+    """Trainer subclass that preserves inverse-frequency patient sampling."""
+
+    def __init__(self, *args, patient_balance="none", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.patient_balance = patient_balance
+
+    def _get_train_sampler(self):
+        if self.patient_balance != "sampler" or self.train_dataset is None:
+            return super()._get_train_sampler()
+        return build_weighted_sampler(self.train_dataset["groups"])
+
+
+def make_monitor_name(args, y_val):
+    """Resolve the effective validation metric used for early stopping."""
+    monitor_name = args.monitor
+    if args.task == "regression" and monitor_name in {"val_auc", "val_patient_auc"}:
+        warnings.warn(
+            f"Switching monitor from {monitor_name} to val_patient_rmse for regression.",
+            stacklevel=2,
+        )
+        monitor_name = "val_patient_rmse"
+    if (
+        args.task == "classification"
+        and np.unique(y_val).shape[0] < 2
+        and monitor_name in {"val_auc", "val_patient_auc"}
+    ):
+        warnings.warn(
+            f"Validation fold has a single class; switching monitor from {monitor_name} "
+            "to val_loss.",
+            stacklevel=2,
+        )
+        monitor_name = "val_loss"
+    return monitor_name
+
+
+def training_metric_name(monitor_name):
+    """Map repository-style validation metrics to Trainer metric names."""
+    if not monitor_name.startswith("val_"):
+        raise ValueError(f"Unsupported monitor name: {monitor_name}")
+    return f"eval_{monitor_name.removeprefix('val_')}"
+
+
+def metric_direction(metric_name):
+    """Return whether a metric should be maximized."""
+    minimize_metrics = {
+        "eval_loss",
+        "eval_mae",
+        "eval_rmse",
+        "eval_patient_mae",
+        "eval_patient_rmse",
+    }
+    return metric_name not in minimize_metrics
+
+
+def extract_best_epoch(log_history, metric_name, maximize):
+    """Recover the best epoch from Trainer log history."""
+    candidates = [
+        entry
+        for entry in log_history
+        if metric_name in entry and "epoch" in entry
+    ]
+    if not candidates:
+        return -1, np.nan
+
+    best_entry = max(
+        candidates,
+        key=lambda entry: metric_or_default(entry[metric_name], maximize=maximize),
+    )
+    if not maximize:
+        best_entry = min(
+            candidates,
+            key=lambda entry: metric_or_default(entry[metric_name], maximize=maximize),
+        )
+
+    return int(round(best_entry["epoch"])), float(best_entry[metric_name])
+
+
+def build_history_dataframe(log_history):
+    """Convert Trainer log history into a compact epoch-by-epoch dataframe."""
+    rows = {}
+    ignored_eval_fields = {
+        "eval_runtime",
+        "eval_samples_per_second",
+        "eval_steps_per_second",
+        "eval_jit_compilation_time",
+    }
+    for entry in log_history:
+        if "epoch" not in entry:
+            continue
+        epoch = int(round(entry["epoch"]))
+        row = rows.setdefault(epoch, {"epoch": epoch})
+        if "loss" in entry and "eval_loss" not in entry:
+            row["train_loss"] = float(entry["loss"])
+        if "learning_rate" in entry:
+            row["lr"] = float(entry["learning_rate"])
+        for key, value in entry.items():
+            if key.startswith("eval_") and key not in ignored_eval_fields:
+                row[f"val_{key.removeprefix('eval_')}"] = float(value)
+
+    if not rows:
+        return pd.DataFrame(columns=["epoch", "train_loss", "val_loss", "lr"])
+    return pd.DataFrame(rows.values()).sort_values("epoch").reset_index(drop=True)
+
+
+def normalize_metric_values(metrics):
+    """Convert Trainer metric payloads into plain Python scalars."""
+    normalized = {}
+    for key, value in metrics.items():
+        if isinstance(value, np.generic):
+            normalized[key] = value.item()
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def extract_prefixed_metrics(metrics, prefix):
+    """Strip a Trainer metric prefix from a metric dictionary."""
+    prefix = f"{prefix}_"
+    ignored_suffixes = {
+        "runtime",
+        "samples_per_second",
+        "steps_per_second",
+        "jit_compilation_time",
+    }
+    normalized = {}
+    for key, value in normalize_metric_values(metrics).items():
+        if not key.startswith(prefix):
+            continue
+        suffix = key.removeprefix(prefix)
+        if suffix in ignored_suffixes:
+            continue
+        normalized[suffix] = value
+    return normalized
+
+
+def build_training_arguments(args, model_store, run_name, monitor_name, report_to, no_cuda):
+    """Create TrainingArguments configured for epoch-level evaluation."""
+    return TrainingArguments(
+        output_dir=model_store,
+        overwrite_output_dir=True,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=max(args.batch_size * 2, 1),
+        learning_rate=args.lr,
+        weight_decay=args.weight_decay,
+        lr_scheduler_type=args.lr_scheduler_type,
+        warmup_ratio=args.warmup_ratio,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        logging_strategy="epoch",
+        save_total_limit=2,
+        load_best_model_at_end=True,
+        metric_for_best_model=training_metric_name(monitor_name),
+        greater_is_better=metric_direction(training_metric_name(monitor_name)),
+        dataloader_num_workers=args.num_workers,
+        seed=args.seed,
+        data_seed=args.seed,
+        max_grad_norm=max(args.grad_clip, 0.0),
+        no_cuda=no_cuda,
+        report_to=report_to,
+        run_name=f"{args.model}_{run_name}",
+        logging_dir=os.path.join(model_store, "logs"),
+        remove_unused_columns=True,
     )
 
 
@@ -488,6 +584,8 @@ def run_training(args, data_bundle=None, print_summary=True):
         raise TypeError("run_training expects an argparse.Namespace.")
 
     seed_everything(args.seed)
+    no_cuda = configure_runtime_device(args.device)
+
     target_col = resolve_target_col(args)
     args.target_col = target_col
     if data_bundle is None:
@@ -529,57 +627,28 @@ def run_training(args, data_bundle=None, print_summary=True):
         test_y_model = (
             test_y - regression_target_stats["mean"]
         ) / regression_target_stats["std"]
+        pos_weight = None
     else:
         y_tr_model = y_tr
         y_val_model = y_val
         test_y_model = test_y
-
-    (
-        train_ds,
-        val_ds,
-        test_ds,
-        train_loader,
-        train_eval_loader,
-        val_loader,
-        test_loader,
-    ) = _make_dataloaders(
-        args,
-        X_tr,
-        y_tr_model,
-        groups_tr,
-        X_val,
-        y_val_model,
-        groups_val,
-        test_X,
-        test_y_model,
-        test_groups,
-    )
-
-    run_name = args.run_name or datetime.now().strftime("%Y-%m-%d_%H:%M")
-    model_store = os.path.join(args.train_dir, f"deep_models_{run_name}")
-    os.makedirs(model_store, exist_ok=True)
-
-    device = get_device(args.device)
-    model = make_model(args, input_dim=train_X.shape[2]).to(device)
-
-    if args.task == "classification":
         pos_count = y_tr.sum()
         neg_count = len(y_tr) - pos_count
         if pos_count == 0 or neg_count == 0:
             raise ValueError(
                 "Training fold must contain both positive and negative examples."
             )
-        pos_weight = torch.tensor(
-            [neg_count / pos_count], device=device, dtype=torch.float32
-        )
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    else:
-        criterion = nn.MSELoss()
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
+        pos_weight = neg_count / pos_count
+
+    train_ds = build_hf_dataset(X_tr, y_tr_model, groups_tr)
+    val_ds = build_hf_dataset(X_val, y_val_model, groups_val)
+    test_ds = build_hf_dataset(test_X, test_y_model, test_groups)
+
+    run_name = args.run_name or datetime.now().strftime("%Y-%m-%d_%H:%M")
+    model_store = os.path.join(args.train_dir, f"deep_models_{run_name}")
+    os.makedirs(model_store, exist_ok=True)
+
+    model = make_model(args, input_dim=train_X.shape[2], pos_weight=pos_weight)
     wandb_run = maybe_init_wandb(
         args,
         run_name,
@@ -593,173 +662,80 @@ def run_training(args, data_bundle=None, print_summary=True):
         test_ds,
     )
 
-    monitor_name = args.monitor
-    if args.task == "regression" and monitor_name in {"val_auc", "val_patient_auc"}:
-        warnings.warn(
-            f"Switching monitor from {monitor_name} to val_patient_rmse for regression.",
-            stacklevel=2,
-        )
-        monitor_name = "val_patient_rmse"
-    if (
-        args.task == "classification"
-        and np.unique(y_val).shape[0] < 2
-        and monitor_name in {"val_auc", "val_patient_auc"}
-    ):
-        warnings.warn(
-            f"Validation fold has a single class; switching monitor from {monitor_name} "
-            "to val_loss.",
-            stacklevel=2,
-        )
-        monitor_name = "val_loss"
+    monitor_name = make_monitor_name(args, y_val)
+    metrics_computer = GroupAwareMetricsComputer(
+        args.task,
+        target_stats=regression_target_stats,
+    )
+    metrics_computer.set_groups(groups_val)
 
-    minimize_metrics = {
-        "val_loss",
-        "val_mae",
-        "val_rmse",
-        "val_patient_mae",
-        "val_patient_rmse",
-    }
-    history = []
-    best_metric = np.inf if monitor_name in minimize_metrics else -np.inf
-    best_epoch = -1
-    epochs_without_improvement = 0
+    training_args = build_training_arguments(
+        args,
+        model_store,
+        run_name,
+        monitor_name,
+        report_to=["wandb"] if wandb_run is not None else [],
+        no_cuda=no_cuda,
+    )
+
+    callbacks = []
+    if args.early_stopping_patience > 0:
+        callbacks.append(
+            EarlyStoppingCallback(early_stopping_patience=args.early_stopping_patience)
+        )
+
+    trainer = PatientBalancedTrainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_ds,
+        eval_dataset=val_ds,
+        compute_metrics=metrics_computer,
+        patient_balance=args.patient_balance,
+        callbacks=callbacks,
+    )
+    trainer.train()
+
+    maximize = metric_direction(training_metric_name(monitor_name))
+    best_epoch, best_metric = extract_best_epoch(
+        trainer.state.log_history,
+        training_metric_name(monitor_name),
+        maximize,
+    )
+    if np.isnan(best_metric) and trainer.state.best_metric is not None:
+        best_metric = float(trainer.state.best_metric)
+
     best_path = os.path.join(model_store, f"{args.model}_best.pt")
-
-    for epoch in tqdm(range(1, args.epochs + 1)):
-        train_loss = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            device,
-            args.grad_clip,
-        )
-        train_metrics = evaluate(
-            model,
-            train_eval_loader,
-            criterion,
-            device,
-            groups_tr,
-            args.task,
-            target_stats=regression_target_stats,
-        )
-        val_metrics = evaluate(
-            model,
-            val_loader,
-            criterion,
-            device,
-            groups_val,
-            args.task,
-            target_stats=regression_target_stats,
-        )
-
-        row = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "val_loss": val_metrics["loss"],
-            "lr": optimizer.param_groups[0]["lr"],
-        }
-        if args.task == "classification":
-            row |= {
-                "train_auc": train_metrics["auc"],
-                "train_balanced_accuracy": train_metrics["balanced_accuracy"],
-                "train_patient_auc": train_metrics["patient_auc"],
-                "train_patient_balanced_accuracy": train_metrics[
-                    "patient_balanced_accuracy"
-                ],
-                "val_auc": val_metrics["auc"],
-                "val_balanced_accuracy": val_metrics["balanced_accuracy"],
-                "val_patient_auc": val_metrics["patient_auc"],
-                "val_patient_balanced_accuracy": val_metrics[
-                    "patient_balanced_accuracy"
-                ],
-            }
-        else:
-            row |= {
-                "train_mae": train_metrics["mae"],
-                "train_rmse": train_metrics["rmse"],
-                "train_r2": train_metrics["r2"],
-                "train_patient_mae": train_metrics["patient_mae"],
-                "train_patient_rmse": train_metrics["patient_rmse"],
-                "train_patient_r2": train_metrics["patient_r2"],
-                "val_mae": val_metrics["mae"],
-                "val_rmse": val_metrics["rmse"],
-                "val_r2": val_metrics["r2"],
-                "val_patient_mae": val_metrics["patient_mae"],
-                "val_patient_rmse": val_metrics["patient_rmse"],
-                "val_patient_r2": val_metrics["patient_r2"],
-            }
-        history.append(row)
-        if wandb_run is not None:
-            wandb.log(row, step=epoch)
-
-        maximize = monitor_name not in minimize_metrics
-        current_metric = metric_or_default(row[monitor_name], maximize=maximize)
-        improved = (
-            current_metric < best_metric
-            if monitor_name in minimize_metrics
-            else current_metric > best_metric
-        )
-        if improved or best_epoch == -1:
-            best_metric = current_metric
-            best_epoch = epoch
-            epochs_without_improvement = 0
-            # The checkpoint stores enough metadata to reload the exact trained
-            # model configuration without relying on the W&B run state.
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "config": vars(args),
-                    "channels": channels,
-                    "best_epoch": best_epoch,
-                    "best_metric": best_metric,
-                    "monitor": monitor_name,
-                    "task": args.task,
-                    "target_col": target_col,
-                    "target_stats": regression_target_stats,
-                },
-                best_path,
-            )
-        else:
-            epochs_without_improvement += 1
-
-        if (
-            args.early_stopping_patience > 0
-            and epochs_without_improvement >= args.early_stopping_patience
-        ):
-            print("Met early stopping criterion")
-            break
-
-    checkpoint = torch.load(best_path, map_location=device)
-    model.load_state_dict(checkpoint["model_state_dict"])
-
-    train_metrics = evaluate(
-        model,
-        train_eval_loader,
-        criterion,
-        device,
-        groups_tr,
-        args.task,
-        target_stats=regression_target_stats,
+    torch.save(
+        {
+            "model_state_dict": trainer.model.state_dict(),
+            "config": vars(args),
+            "channels": channels,
+            "best_epoch": best_epoch,
+            "best_metric": best_metric,
+            "monitor": monitor_name,
+            "task": args.task,
+            "target_col": target_col,
+            "target_stats": regression_target_stats,
+            "trainer_best_checkpoint": trainer.state.best_model_checkpoint,
+        },
+        best_path,
     )
-    val_metrics = evaluate(
-        model,
-        val_loader,
-        criterion,
-        device,
-        groups_val,
-        args.task,
-        target_stats=regression_target_stats,
-    )
-    test_metrics = evaluate(
-        model,
-        test_loader,
-        criterion,
-        device,
-        test_groups,
-        args.task,
-        target_stats=regression_target_stats,
-    )
+
+    history_df = build_history_dataframe(trainer.state.log_history)
+    history_path = os.path.join(model_store, f"{args.model}_history.csv")
+    history_df.to_csv(history_path, index=False)
+
+    metrics_computer.set_groups(groups_tr)
+    train_output = trainer.predict(train_ds, metric_key_prefix="train")
+    train_metrics = extract_prefixed_metrics(train_output.metrics, "train")
+
+    metrics_computer.set_groups(groups_val)
+    val_output = trainer.predict(val_ds, metric_key_prefix="val")
+    val_metrics = extract_prefixed_metrics(val_output.metrics, "val")
+
+    metrics_computer.set_groups(test_groups)
+    test_output = trainer.predict(test_ds, metric_key_prefix="test")
+    test_metrics = extract_prefixed_metrics(test_output.metrics, "test")
 
     summary = {
         "run_name": run_name,
@@ -776,9 +752,7 @@ def run_training(args, data_bundle=None, print_summary=True):
         "test": test_metrics,
     }
 
-    history_path = os.path.join(model_store, f"{args.model}_history.csv")
     summary_path = os.path.join(model_store, f"{args.model}_summary.json")
-    pd.DataFrame(history).to_csv(history_path, index=False)
     save_json(summary_path, summary)
 
     if wandb_run is not None:

@@ -12,23 +12,9 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import torch
+from datasets import Array2D, Dataset as HFDataset, Features, Value
 from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
-from torch.utils.data import Dataset, WeightedRandomSampler
-
-
-class SequenceDataset(Dataset):
-    """Torch dataset wrapper for precomputed sequence windows."""
-
-    def __init__(self, X, y, groups):
-        self.X = torch.from_numpy(np.asarray(X, dtype=np.float32))
-        self.y = torch.tensor(y, dtype=torch.float32)
-        self.groups = np.asarray(groups).astype(str)
-
-    def __len__(self):
-        return self.X.shape[0]
-
-    def __getitem__(self, idx):
-        return self.X[idx], self.y[idx]
+from torch.utils.data import WeightedRandomSampler
 
 
 def infer_base_ptid(labels):
@@ -117,6 +103,31 @@ def load_split_arrays(train_dir, split, data_mode="raw", target_col="in?"):
     X = reshape_flat_windows(X, len(channels)).astype(np.float32, copy=False)
 
     return X, y, groups, labels, channels
+def build_hf_dataset(X, y, groups):
+    """Build a Hugging Face Dataset for one split of recurrent windows."""
+    X = np.asarray(X, dtype=np.float32)
+    y = np.asarray(y, dtype=np.float32)
+    groups = np.asarray(groups).astype(str)
+
+    features = Features(
+        {
+            "features": Array2D(
+                shape=(int(X.shape[1]), int(X.shape[2])),
+                dtype="float32",
+            ),
+            "labels": Value("float32"),
+            "groups": Value("string"),
+        }
+    )
+    dataset = HFDataset.from_dict(
+        {
+            "features": X,
+            "labels": y,
+            "groups": groups.tolist(),
+        },
+        features=features,
+    )
+    return dataset.with_format("torch", columns=["features", "labels"], output_all_columns=True)
 
 
 def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0, task="classification"):
