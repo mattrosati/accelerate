@@ -20,7 +20,7 @@ module load miniconda
 cd /home/mr2238/accelerate
 
 # this is just brute force env install because getting conda to work with .yml is terrible
-mamba create --prefix "$PREFIX" \
+mamba create --prefix "$PREFIX" -c conda-forge \
     python=3.10 \
     pip \
     numpy \
@@ -30,7 +30,7 @@ mamba create --prefix "$PREFIX" \
     h5py \
     dask \
     dask-ml \
-    umap \
+    umap-learn \
     scikit-learn \
     seaborn
 conda activate "$PREFIX"

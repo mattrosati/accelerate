@@ -14,6 +14,7 @@ import warnings
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
 from pathlib import Path
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
@@ -70,7 +71,7 @@ def build_parser(add_help=True):
         "--target_col",
         type=str,
         default="",
-        help="Label column to predict. Defaults to `in?` for classification and `frac_out` for regression.",
+        help="Label column to predict. Defaults to `in?` for classification and `MAPopt_Yale_affected_beta` for regression (frac_out also implemented).",
     )
     parser.add_argument("--run_name", type=str, default="")
     parser.add_argument("--seed", type=int, default=42)
@@ -79,7 +80,7 @@ def build_parser(add_help=True):
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--hidden_dim", type=int, default=128)
-    parser.add_argument("--num_layers", type=int, default=2)
+    parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
@@ -99,7 +100,12 @@ def build_parser(add_help=True):
         default="auto",
         help="Device string like cpu, cuda, cuda:0, or auto.",
     )
-    parser.add_argument("--early_stopping_patience", type=int, default=10)
+    parser.add_argument(
+        "--early_stopping_patience",
+        type=int,
+        default=0,
+        help="Max number of epochs without validation improvement. Defaults to no early stopping.",
+    )
     parser.add_argument(
         "--monitor",
         type=str,
@@ -260,7 +266,7 @@ def resolve_target_col(args):
     """Resolve the effective target column from the task and CLI args."""
     if args.target_col:
         return args.target_col
-    return "in?" if args.task == "classification" else "frac_out"
+    return "in?" if args.task == "classification" else "MAPopt_Yale_affected_beta"
 
 
 def get_regression_target_stats(y_train):
@@ -514,8 +520,12 @@ def run_training(args, data_bundle=None, print_summary=True):
     regression_target_stats = None
     if args.task == "regression":
         regression_target_stats = get_regression_target_stats(y_tr)
-        y_tr_model = (y_tr - regression_target_stats["mean"]) / regression_target_stats["std"]
-        y_val_model = (y_val - regression_target_stats["mean"]) / regression_target_stats["std"]
+        y_tr_model = (y_tr - regression_target_stats["mean"]) / regression_target_stats[
+            "std"
+        ]
+        y_val_model = (
+            y_val - regression_target_stats["mean"]
+        ) / regression_target_stats["std"]
         test_y_model = (
             test_y - regression_target_stats["mean"]
         ) / regression_target_stats["std"]
@@ -615,7 +625,7 @@ def run_training(args, data_bundle=None, print_summary=True):
     epochs_without_improvement = 0
     best_path = os.path.join(model_store, f"{args.model}_best.pt")
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in tqdm(range(1, args.epochs + 1)):
         train_loss = train_one_epoch(
             model,
             train_loader,
@@ -713,7 +723,11 @@ def run_training(args, data_bundle=None, print_summary=True):
         else:
             epochs_without_improvement += 1
 
-        if epochs_without_improvement >= args.early_stopping_patience:
+        if (
+            args.early_stopping_patience > 0
+            and epochs_without_improvement >= args.early_stopping_patience
+        ):
+            print("Met early stopping criterion")
             break
 
     checkpoint = torch.load(best_path, map_location=device)
