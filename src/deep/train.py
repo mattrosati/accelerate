@@ -56,7 +56,7 @@ def build_parser(add_help=True):
     parser.add_argument(
         "--data_mode",
         type=str,
-        choices=["raw"],
+        choices=["raw", "design", "whiten"],
         default="raw",
         help="Deep recurrent models currently operate on raw multivariate windows.",
     )
@@ -470,9 +470,7 @@ def metric_direction(metric_name):
 def extract_best_epoch(log_history, metric_name, maximize):
     """Recover the best epoch from Trainer log history."""
     candidates = [
-        entry
-        for entry in log_history
-        if metric_name in entry and "epoch" in entry
+        entry for entry in log_history if metric_name in entry and "epoch" in entry
     ]
     if not candidates:
         return -1, np.nan
@@ -548,7 +546,9 @@ def extract_prefixed_metrics(metrics, prefix):
     return normalized
 
 
-def build_training_arguments(args, model_store, run_name, monitor_name, report_to, no_cuda):
+def build_training_arguments(
+    args, model_store, run_name, monitor_name, report_to, no_cuda
+):
     """Create TrainingArguments configured for epoch-level evaluation."""
     training_kwargs = {
         "output_dir": model_store,
