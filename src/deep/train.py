@@ -419,10 +419,14 @@ class PatientBalancedTrainer(Trainer):
         super().__init__(*args, **kwargs)
         self.patient_balance = patient_balance
 
-    def _get_train_sampler(self):
-        if self.patient_balance != "sampler" or self.train_dataset is None:
-            return super()._get_train_sampler()
-        return build_weighted_sampler(self.train_dataset["groups"])
+    def _get_train_sampler(self, train_dataset=None):
+        if self.patient_balance != "sampler":
+            return super()._get_train_sampler(train_dataset)
+        if train_dataset is None:
+            train_dataset = self.train_dataset
+        if train_dataset is None:
+            return super()._get_train_sampler(train_dataset)
+        return build_weighted_sampler(train_dataset["groups"])
 
 
 def make_monitor_name(args, y_val):
