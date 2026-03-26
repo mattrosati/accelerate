@@ -415,18 +415,17 @@ class GroupAwareMetricsComputer:
 class PatientBalancedTrainer(Trainer):
     """Trainer subclass that preserves inverse-frequency patient sampling."""
 
-    def __init__(self, *args, patient_balance="none", **kwargs):
+    def __init__(self, *args, patient_balance="none", train_groups=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.patient_balance = patient_balance
+        self.train_groups = None if train_groups is None else np.asarray(train_groups)
 
     def _get_train_sampler(self, train_dataset=None):
         if self.patient_balance != "sampler":
             return super()._get_train_sampler(train_dataset)
-        if train_dataset is None:
-            train_dataset = self.train_dataset
-        if train_dataset is None:
+        if self.train_groups is None:
             return super()._get_train_sampler(train_dataset)
-        return build_weighted_sampler(train_dataset["groups"])
+        return build_weighted_sampler(self.train_groups)
 
 
 def make_monitor_name(args, y_val):
@@ -705,6 +704,7 @@ def run_training(args, data_bundle=None, print_summary=True):
         eval_dataset=val_ds,
         compute_metrics=metrics_computer,
         patient_balance=args.patient_balance,
+        train_groups=groups_tr,
         callbacks=callbacks,
     )
     trainer.train()
