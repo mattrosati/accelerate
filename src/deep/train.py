@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import wandb
 from transformers import EarlyStoppingCallback
+from transformers.trainer_callback import ProgressCallback
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
@@ -32,6 +33,7 @@ from deep.models import GRUClassifier, LSTMClassifier  # noqa: E402
 from deep.trainer import (  # noqa: E402
     GroupAwareMetricsComputer,
     PatientBalancedTrainer,
+    QuietProgressCallback,
     build_history_dataframe,
     build_training_arguments,
     extract_best_epoch,
@@ -415,6 +417,8 @@ def run_training(args, data_bundle=None, print_summary=True):
         wandb_run=wandb_run,
         callbacks=callbacks,
     )
+    trainer.remove_callback(ProgressCallback)
+    trainer.add_callback(QuietProgressCallback())
     trainer.train()
 
     maximize = metric_direction(training_metric_name(monitor_name))

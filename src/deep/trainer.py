@@ -17,6 +17,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from transformers import Trainer, TrainingArguments
+from transformers.trainer_callback import ProgressCallback
 
 from deep.data import build_weighted_sampler, make_patient_weights
 
@@ -327,6 +328,13 @@ class PatientBalancedTrainer(Trainer):
             self._record_split_metrics(self.train_metrics_split)
 
         return metrics
+
+
+class QuietProgressCallback(ProgressCallback):
+    """Keep tqdm progress bars while suppressing the default metric dict prints."""
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        return control
 
 
 def make_monitor_name(args, y_val):
