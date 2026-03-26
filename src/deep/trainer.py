@@ -255,15 +255,14 @@ class PatientBalancedTrainer(Trainer):
             payload["epoch"] = float(self.state.epoch)
         return payload
 
-    def _record_metrics_without_console_log(self, metrics):
+    def _append_metrics_to_history(self, metrics):
         payload = self._make_epoch_log_payload(metrics)
         history_entry = dict(payload)
         history_entry["step"] = self.state.global_step
         self.state.log_history.append(history_entry)
-        if self.wandb_run is not None:
-            self.wandb_run.log(payload, step=self.state.global_step)
+        return payload
 
-    def _predict_extra_split_metrics(self, split_config):
+    def _predict_split_metrics(self, split_config):
         if (
             split_config.dataset is None
             or split_config.groups is None
@@ -278,15 +277,17 @@ class PatientBalancedTrainer(Trainer):
             self.metrics_computer,
         )
 
-    def _collect_train_metrics(self):
-        train_metrics = self._predict_extra_split_metrics(self.train_metrics_split)
-        if train_metrics:
-            self._record_metrics_without_console_log(train_metrics)
+    def _record_split_metrics(self, split_config):
+        metrics = self._predict_split_metrics(split_config)
+        if not metrics:
+            return
+        payload = self._append_metrics_to_history(metrics)
+        self._log_to_wandb(payload)
 
     def _log_to_wandb(self, payload):
         if self.wandb_run is None:
             return
-        self.wandb_run.log(payload, step=self.state.global_step)
+        self.wandb_run.log(payload)
 
     def _log_validation_confusion_matrix(self):
         if self.metrics_computer is None:
@@ -323,7 +324,7 @@ class PatientBalancedTrainer(Trainer):
 
         if metric_key_prefix == "eval":
             self._log_validation_confusion_matrix()
-            self._collect_train_metrics()
+            self._record_split_metrics(self.train_metrics_split)
 
         return metrics
 
