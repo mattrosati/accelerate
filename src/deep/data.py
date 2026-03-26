@@ -16,6 +16,12 @@ from datasets import Array2D, Dataset as HFDataset, Features, Value
 from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
 from torch.utils.data import WeightedRandomSampler
 
+DATA_MODE_FILES = {
+    "raw": "x.zarr",
+    "design": "design_x.zarr",
+    "whiten": "white_design_x.zarr",
+}
+
 
 def infer_base_ptid(labels):
     """Return the patient identifier used for grouped splitting/evaluation."""
@@ -56,21 +62,28 @@ def reshape_flat_windows(X, num_channels):
     return np.transpose(X, (0, 2, 1))
 
 
+def resolve_data_file(data_mode):
+    """Map a supported data mode to the stored zarr filename."""
+    try:
+        return DATA_MODE_FILES[data_mode]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unsupported data_mode `{data_mode}`. Expected one of {sorted(DATA_MODE_FILES)}."
+        ) from exc
+
+
 def load_split_arrays(train_dir, split, data_mode="raw", target_col="in?"):
     """Load one repository split and reshape it into recurrent-model input.
 
     Returns feature tensors, binary labels, base-patient groups, the filtered
     labels dataframe, and inferred channel names.
     """
-    if data_mode != "raw":
-        raise ValueError("Deep recurrent models currently support only raw windows.")
-
     if "downsample" not in train_dir:
         raise ValueError(
             "Deep recurrent models require a downsampled dataset so all channels share a time grid."
         )
 
-    data_file = "x.zarr"
+    data_file = resolve_data_file(data_mode)
     X = da.from_zarr(os.path.join(train_dir, "permanent", split, data_file)).compute()
     labels = pd.read_pickle(os.path.join(train_dir, "permanent", split, "labels.pkl"))
 
@@ -103,11 +116,12 @@ def load_split_arrays(train_dir, split, data_mode="raw", target_col="in?"):
     X = reshape_flat_windows(X, len(channels)).astype(np.float32, copy=False)
 
     return X, y, groups, labels, channels
-def build_hf_dataset(X, y, groups):
+
+
+def build_hf_dataset(X, y):
     """Build a Hugging Face Dataset for one split of recurrent windows."""
     X = np.asarray(X, dtype=np.float32)
     y = np.asarray(y, dtype=np.float32)
-    groups = np.asarray(groups).astype(str)
 
     features = Features(
         {
@@ -116,18 +130,16 @@ def build_hf_dataset(X, y, groups):
                 dtype="float32",
             ),
             "labels": Value("float32"),
-            "groups": Value("string"),
         }
     )
     dataset = HFDataset.from_dict(
         {
             "features": X,
             "labels": y,
-            "groups": groups.tolist(),
         },
         features=features,
     )
-    return dataset.with_format("torch", columns=["features", "labels"], output_all_columns=True)
+    return dataset.with_format("torch", columns=["features", "labels"])
 
 
 def make_grouped_split(y, groups, n_splits=5, seed=42, fold_idx=0, task="classification"):
