@@ -39,6 +39,7 @@ from deep.trainer import (  # noqa: E402
     metric_direction,
     predict_split_metrics,
     save_trainer_checkpoint,
+    training_metric_name,
     update_wandb_summary,
 )
 
