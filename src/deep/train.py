@@ -13,6 +13,7 @@ import sys
 import warnings
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
+from inspect import signature
 from pathlib import Path
 
 import numpy as np
@@ -549,33 +550,42 @@ def extract_prefixed_metrics(metrics, prefix):
 
 def build_training_arguments(args, model_store, run_name, monitor_name, report_to, no_cuda):
     """Create TrainingArguments configured for epoch-level evaluation."""
-    return TrainingArguments(
-        output_dir=model_store,
-        overwrite_output_dir=True,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=max(args.batch_size * 2, 1),
-        learning_rate=args.lr,
-        weight_decay=args.weight_decay,
-        lr_scheduler_type=args.lr_scheduler_type,
-        warmup_ratio=args.warmup_ratio,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        logging_strategy="epoch",
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        metric_for_best_model=training_metric_name(monitor_name),
-        greater_is_better=metric_direction(training_metric_name(monitor_name)),
-        dataloader_num_workers=args.num_workers,
-        seed=args.seed,
-        data_seed=args.seed,
-        max_grad_norm=max(args.grad_clip, 0.0),
-        no_cuda=no_cuda,
-        report_to=report_to,
-        run_name=f"{args.model}_{run_name}",
-        logging_dir=os.path.join(model_store, "logs"),
-        remove_unused_columns=True,
-    )
+    training_kwargs = {
+        "output_dir": model_store,
+        "overwrite_output_dir": True,
+        "num_train_epochs": args.epochs,
+        "per_device_train_batch_size": args.batch_size,
+        "per_device_eval_batch_size": max(args.batch_size * 2, 1),
+        "learning_rate": args.lr,
+        "weight_decay": args.weight_decay,
+        "lr_scheduler_type": args.lr_scheduler_type,
+        "warmup_ratio": args.warmup_ratio,
+        "save_strategy": "epoch",
+        "logging_strategy": "epoch",
+        "save_total_limit": 2,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": training_metric_name(monitor_name),
+        "greater_is_better": metric_direction(training_metric_name(monitor_name)),
+        "dataloader_num_workers": args.num_workers,
+        "seed": args.seed,
+        "data_seed": args.seed,
+        "max_grad_norm": max(args.grad_clip, 0.0),
+        "report_to": report_to,
+        "run_name": f"{args.model}_{run_name}",
+        "logging_dir": os.path.join(model_store, "logs"),
+        "remove_unused_columns": True,
+    }
+    training_arg_params = signature(TrainingArguments.__init__).parameters
+    if "evaluation_strategy" in training_arg_params:
+        training_kwargs["evaluation_strategy"] = "epoch"
+    else:
+        training_kwargs["eval_strategy"] = "epoch"
+    if "no_cuda" in training_arg_params:
+        training_kwargs["no_cuda"] = no_cuda
+    elif "use_cpu" in training_arg_params:
+        training_kwargs["use_cpu"] = no_cuda
+
+    return TrainingArguments(**training_kwargs)
 
 
 def run_training(args, data_bundle=None, print_summary=True):
