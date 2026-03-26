@@ -241,8 +241,8 @@ if __name__ == "__main__":
     elif args.model == "decision_tree":
         model = DecisionTreeClassifier()
         params = {
-            "max_depth": tune.qrandint(5, 50, 5),
-            "max_features": tune.choice([0.02, 0.05, 0.1, "sqrt"]),
+            "max_depth": tune.qrandint(2, 50, 4),
+            "max_features": tune.choice([0.01, 0.02, 0.05, 0.1, 0.2, "sqrt"]),
             "min_samples_split": tune.randint(2, 25),
             "min_samples_leaf": tune.randint(1, 15),
             "class_weight": tune.choice([None, "balanced"]),
@@ -280,8 +280,8 @@ if __name__ == "__main__":
             "subsample": tune.quniform(0.5, 0.9, 0.05),
             "colsample_bytree": tune.quniform(0.5, 1.0, 0.05),
             "gamma": tune.quniform(0.5, 10, 0.25),
-            "reg_alpha": tune.loguniform(1e-1, 50.0),
-            "reg_lambda": tune.loguniform(1.0, 100.0),
+            "reg_alpha": tune.loguniform(1e-3, 25.0),
+            "reg_lambda": tune.loguniform(1e-2, 100.0),
             "min_child_weight": tune.loguniform(1.0, 50.0),
         }
         n_iter = (len(list(params.keys())) - 1) * 10
