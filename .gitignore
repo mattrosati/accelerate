@@ -74,6 +74,12 @@ mydask.html
 .vscode/
 
 # -------------------
+# Claude Code
+# -------------------
+CLAUDE.md
+.claude/
+
+# -------------------
 # OS files
 # -------------------
 .DS_Store
