@@ -8,7 +8,6 @@ paths as a normal single training run.
 import json
 import os
 import sys
-import warnings
 from argparse import ArgumentParser, Namespace
 from copy import deepcopy
 from datetime import datetime
@@ -21,6 +20,8 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from deep.checkpointing import save_json  # noqa: E402
+from deep.metrics import optuna_direction, resolve_monitor  # noqa: E402
 from deep.train import (  # noqa: E402
     build_parser,
     load_data_bundle,
@@ -118,32 +119,12 @@ def extract_metric(summary, metric_name):
     return summary["val"][metric_name.removeprefix("val_")]
 
 
-def resolve_search_metric(args):
-    """Pick a metric compatible with the current training task."""
-    if args.task == "regression" and args.search_metric in {
-        "val_auc",
-        "val_patient_auc",
-    }:
-        warnings.warn(
-            f"Switching search metric from {args.search_metric} to val_patient_rmse for regression.",
-            stacklevel=2,
-        )
-        return "val_patient_rmse"
-    return args.search_metric
-
-
-def save_json(path, payload):
-    """Write a JSON payload with stable formatting for later review."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
-
-
 def main():
     """CLI entrypoint for Optuna-based deep-model hyperparameter search."""
     args = build_search_parser().parse_args()
     if not args.search_name:
         args.search_name = datetime.now().strftime("%Y-%m-%d_%H:%M")
-    args.search_metric = resolve_search_metric(args)
+    args.search_metric = resolve_monitor(args.task, args.search_metric)
 
     search_store = os.path.join(args.train_dir, f"deep_search_{args.search_name}")
     os.makedirs(search_store, exist_ok=True)
@@ -153,12 +134,7 @@ def main():
         args.data_mode,
         resolve_target_col(args),
     )
-    direction = (
-        "minimize"
-        if args.search_metric
-        in {"val_loss", "val_mae", "val_rmse", "val_patient_mae", "val_patient_rmse"}
-        else "maximize"
-    )
+    direction = optuna_direction(args.search_metric)
     study = optuna.create_study(
         study_name=args.search_name,
         direction=direction,

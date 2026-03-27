@@ -8,7 +8,6 @@ checkpointing, and W&B logging paths.
 import json
 import os
 import random
-import re
 import sys
 from argparse import ArgumentParser, Namespace
 from datetime import datetime
@@ -24,25 +23,31 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from deep.callbacks import QuietProgressCallback  # noqa: E402
+from deep.checkpointing import (  # noqa: E402
+    log_wandb_artifacts,
+    save_json,
+    save_trainer_checkpoint,
+    update_wandb_summary,
+)
 from deep.data import (  # noqa: E402
     build_hf_dataset,
     load_split_arrays,
     make_grouped_split,
 )
-from deep.models import GRUClassifier, LSTMClassifier  # noqa: E402
-from deep.trainer import (  # noqa: E402
+from deep.metrics import (  # noqa: E402
     GroupAwareMetricsComputer,
-    PatientBalancedTrainer,
-    QuietProgressCallback,
     build_history_dataframe,
-    build_training_arguments,
     extract_best_epoch,
-    make_monitor_name,
     metric_direction,
     predict_split_metrics,
-    save_trainer_checkpoint,
+    resolve_monitor,
     training_metric_name,
-    update_wandb_summary,
+)
+from deep.models import GRUClassifier, LSTMClassifier  # noqa: E402
+from deep.trainer import (  # noqa: E402
+    PatientBalancedTrainer,
+    build_training_arguments,
 )
 
 
@@ -150,6 +155,11 @@ def build_parser(add_help=True):
     return parser
 
 
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+
 def seed_everything(seed):
     """Seed Python, NumPy, and Torch RNGs for reproducible runs."""
     random.seed(seed)
@@ -176,71 +186,11 @@ def configure_runtime_device(requested):
     return False
 
 
-def make_model(args, input_dim, pos_weight=None):
-    """Instantiate the requested recurrent predictor from CLI args."""
-    kwargs = {
-        "input_dim": input_dim,
-        "hidden_dim": args.hidden_dim,
-        "num_layers": args.num_layers,
-        "dropout": args.dropout,
-        "bidirectional": args.bidirectional,
-        "task": args.task,
-        "pos_weight": pos_weight,
-    }
-    if args.model == "lstm":
-        return LSTMClassifier(**kwargs)
-    if args.model == "gru":
-        return GRUClassifier(**kwargs)
-    raise ValueError(f"Unsupported model: {args.model}")
-
-
 def resolve_target_col(args):
     """Resolve the effective target column from the task and CLI args."""
     if args.target_col:
         return args.target_col
     return "in?" if args.task == "classification" else "MAPopt_Yale_affected_beta"
-
-
-def get_regression_target_stats(y_train):
-    """Return train-fold normalization stats for regression targets."""
-    mean = float(np.mean(y_train))
-    std = float(np.std(y_train))
-    if std <= 0.0:
-        std = 1.0
-    return {"mean": mean, "std": std}
-
-
-def prepare_targets(args, y_tr, y_val, test_y):
-    """Prepare model-space targets and any task-specific training metadata."""
-    if args.task == "regression":
-        target_stats = get_regression_target_stats(y_tr)
-        return (
-            (y_tr - target_stats["mean"]) / target_stats["std"],
-            (y_val - target_stats["mean"]) / target_stats["std"],
-            (test_y - target_stats["mean"]) / target_stats["std"],
-            target_stats,
-            None,
-        )
-
-    pos_count = y_tr.sum()
-    neg_count = len(y_tr) - pos_count
-    if pos_count == 0 or neg_count == 0:
-        raise ValueError("Training fold must contain both positive and negative examples.")
-    return y_tr, y_val, test_y, None, (neg_count / pos_count)
-
-
-def build_split_datasets(X_tr, y_tr, X_val, y_val, test_X, test_y):
-    """Build Trainer-ready datasets for train/validation/test splits."""
-    train_ds = build_hf_dataset(X_tr, y_tr)
-    val_ds = build_hf_dataset(X_val, y_val)
-    test_ds = build_hf_dataset(test_X, test_y)
-    return train_ds, val_ds, test_ds
-
-
-def save_json(path, payload):
-    """Write a JSON payload with stable formatting for later review."""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, sort_keys=True)
 
 
 def load_data_bundle(train_dir, data_mode, target_col):
@@ -262,68 +212,59 @@ def load_data_bundle(train_dir, data_mode, target_col):
     }
 
 
-def sanitize_wandb_artifact_name(value):
-    """Return an artifact-safe name for W&B logging."""
-    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", value)
-    sanitized = sanitized.strip("-.")
-    return sanitized or "artifact"
+# ---------------------------------------------------------------------------
+# run_training decomposition helpers
+# ---------------------------------------------------------------------------
 
 
-def maybe_init_wandb(
-    args,
-    run_name,
-    model_store,
-    channels,
-    groups_tr,
-    groups_val,
-    test_groups,
-    train_ds,
-    val_ds,
-    test_ds,
-):
-    """Initialize W&B unless logging has been explicitly disabled."""
-    if args.wandb_mode == "disabled":
-        return None
-
-    wandb_kwargs = {
-        "project": args.wandb_project,
-        "name": f"{args.model}_{run_name}",
-        "config": {
-            **vars(args),
-            "channels": channels,
-            "train_windows": int(len(train_ds)),
-            "val_windows": int(len(val_ds)),
-            "test_windows": int(len(test_ds)),
-            "train_patients": int(np.unique(groups_tr).shape[0]),
-            "val_patients": int(np.unique(groups_val).shape[0]),
-            "test_patients": int(np.unique(test_groups).shape[0]),
-        },
-        "mode": args.wandb_mode,
-        "dir": model_store,
-        "reinit": "finish_previous",
+def _make_model(args, input_dim, pos_weight=None):
+    """Instantiate the requested recurrent predictor from CLI args."""
+    kwargs = {
+        "input_dim": input_dim,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
+        "dropout": args.dropout,
+        "bidirectional": args.bidirectional,
+        "task": args.task,
+        "pos_weight": pos_weight,
     }
-    if args.wandb_entity:
-        wandb_kwargs["entity"] = args.wandb_entity
-    if args.wandb_group:
-        wandb_kwargs["group"] = args.wandb_group
-    if args.wandb_job_type:
-        wandb_kwargs["job_type"] = args.wandb_job_type
-    if args.wandb_tags:
-        wandb_kwargs["tags"] = args.wandb_tags
-    return wandb.init(**wandb_kwargs)
-def run_training(args, data_bundle=None, print_summary=True):
-    """Run one recurrent-model training job and return its summary payload."""
-    if not isinstance(args, Namespace):
-        raise TypeError("run_training expects an argparse.Namespace.")
+    if args.model == "lstm":
+        return LSTMClassifier(**kwargs)
+    if args.model == "gru":
+        return GRUClassifier(**kwargs)
+    raise ValueError(f"Unsupported model: {args.model}")
 
-    seed_everything(args.seed)
-    no_cuda = configure_runtime_device(args.device)
 
-    target_col = resolve_target_col(args)
-    args.target_col = target_col
-    if data_bundle is None:
-        data_bundle = load_data_bundle(args.train_dir, args.data_mode, target_col)
+def _get_regression_target_stats(y_train):
+    """Return train-fold normalization stats for regression targets."""
+    mean = float(np.mean(y_train))
+    std = float(np.std(y_train))
+    if std <= 0.0:
+        std = 1.0
+    return {"mean": mean, "std": std}
 
+
+def _prepare_targets(args, y_tr, y_val, test_y):
+    """Prepare model-space targets and any task-specific training metadata."""
+    if args.task == "regression":
+        target_stats = _get_regression_target_stats(y_tr)
+        return (
+            (y_tr - target_stats["mean"]) / target_stats["std"],
+            (y_val - target_stats["mean"]) / target_stats["std"],
+            (test_y - target_stats["mean"]) / target_stats["std"],
+            target_stats,
+            None,
+        )
+
+    pos_count = y_tr.sum()
+    neg_count = len(y_tr) - pos_count
+    if pos_count == 0 or neg_count == 0:
+        raise ValueError("Training fold must contain both positive and negative examples.")
+    return y_tr, y_val, test_y, None, (neg_count / pos_count)
+
+
+def _make_splits(args, data_bundle):
+    """Create grouped train/val/test arrays from the loaded data bundle."""
     train_X = data_bundle["train_X"]
     train_y = data_bundle["train_y"]
     train_groups = data_bundle["train_groups"]
@@ -348,45 +289,80 @@ def run_training(args, data_bundle=None, print_summary=True):
     if len(y_tr) == 0 or len(y_val) == 0:
         raise ValueError("Grouped split produced an empty training or validation fold.")
 
-    y_tr_model, y_val_model, test_y_model, regression_target_stats, pos_weight = prepare_targets(
-        args,
-        y_tr,
-        y_val,
-        test_y,
-    )
-    train_ds, val_ds, test_ds = build_split_datasets(
-        X_tr,
-        y_tr_model,
-        X_val,
-        y_val_model,
-        test_X,
-        test_y_model,
-    )
+    return {
+        "X_tr": X_tr,
+        "X_val": X_val,
+        "y_tr": y_tr,
+        "y_val": y_val,
+        "groups_tr": groups_tr,
+        "groups_val": groups_val,
+        "test_X": test_X,
+        "test_y": test_y,
+        "test_groups": test_groups,
+        "channels": channels,
+        "input_dim": train_X.shape[2],
+    }
 
-    run_name = args.run_name or datetime.now().strftime("%Y-%m-%d_%H:%M")
-    model_store = os.path.join(args.train_dir, f"deep_models_{run_name}")
-    os.makedirs(model_store, exist_ok=True)
 
-    model = make_model(args, input_dim=train_X.shape[2], pos_weight=pos_weight)
-    wandb_run = maybe_init_wandb(
-        args,
-        run_name,
-        model_store,
-        channels,
-        groups_tr,
-        groups_val,
-        test_groups,
-        train_ds,
-        val_ds,
-        test_ds,
+def _prepare_datasets(args, splits):
+    """Build HF datasets and resolve task-specific target transforms."""
+    y_tr_model, y_val_model, test_y_model, target_stats, pos_weight = _prepare_targets(
+        args, splits["y_tr"], splits["y_val"], splits["test_y"],
     )
+    train_ds = build_hf_dataset(splits["X_tr"], y_tr_model)
+    val_ds = build_hf_dataset(splits["X_val"], y_val_model)
+    test_ds = build_hf_dataset(splits["test_X"], test_y_model)
+    return {
+        "train_ds": train_ds,
+        "val_ds": val_ds,
+        "test_ds": test_ds,
+        "target_stats": target_stats,
+        "pos_weight": pos_weight,
+    }
 
-    monitor_name = make_monitor_name(args, y_val)
+
+def _maybe_init_wandb(args, run_name, model_store, splits, datasets):
+    """Initialize W&B unless logging has been explicitly disabled."""
+    if args.wandb_mode == "disabled":
+        return None
+
+    wandb_kwargs = {
+        "project": args.wandb_project,
+        "name": f"{args.model}_{run_name}",
+        "config": {
+            **vars(args),
+            "channels": splits["channels"],
+            "train_windows": int(len(datasets["train_ds"])),
+            "val_windows": int(len(datasets["val_ds"])),
+            "test_windows": int(len(datasets["test_ds"])),
+            "train_patients": int(np.unique(splits["groups_tr"]).shape[0]),
+            "val_patients": int(np.unique(splits["groups_val"]).shape[0]),
+            "test_patients": int(np.unique(splits["test_groups"]).shape[0]),
+        },
+        "mode": args.wandb_mode,
+        "dir": model_store,
+        "reinit": "finish_previous",
+    }
+    if args.wandb_entity:
+        wandb_kwargs["entity"] = args.wandb_entity
+    if args.wandb_group:
+        wandb_kwargs["group"] = args.wandb_group
+    if args.wandb_job_type:
+        wandb_kwargs["job_type"] = args.wandb_job_type
+    if args.wandb_tags:
+        wandb_kwargs["tags"] = args.wandb_tags
+    return wandb.init(**wandb_kwargs)
+
+
+def _build_trainer(args, splits, datasets, model_store, run_name, wandb_run, no_cuda):
+    """Instantiate the model, metrics computer, and PatientBalancedTrainer."""
+    model = _make_model(args, input_dim=splits["input_dim"], pos_weight=datasets["pos_weight"])
+    monitor_name = resolve_monitor(args.task, args.monitor, y_val=splits["y_val"])
+
     metrics_computer = GroupAwareMetricsComputer(
-        args.task,
-        target_stats=regression_target_stats,
+        args.task, target_stats=datasets["target_stats"],
     )
-    metrics_computer.set_groups(groups_val)
+    metrics_computer.set_groups(splits["groups_val"])
 
     training_args = build_training_arguments(
         args,
@@ -406,21 +382,28 @@ def run_training(args, data_bundle=None, print_summary=True):
     trainer = PatientBalancedTrainer(
         model=model,
         args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=val_ds,
+        train_dataset=datasets["train_ds"],
+        eval_dataset=datasets["val_ds"],
         compute_metrics=metrics_computer,
         patient_balance=args.patient_balance,
-        train_groups=groups_tr,
-        val_groups=groups_val,
-        train_metrics_dataset=train_ds,
+        train_groups=splits["groups_tr"],
+        val_groups=splits["groups_val"],
+        train_metrics_dataset=datasets["train_ds"],
         metrics_computer=metrics_computer,
         wandb_run=wandb_run,
         callbacks=callbacks,
     )
     trainer.remove_callback(ProgressCallback)
     trainer.add_callback(QuietProgressCallback())
-    trainer.train()
 
+    return trainer, metrics_computer, monitor_name
+
+
+def _collect_and_save_results(
+    trainer, args, splits, datasets, metrics_computer,
+    model_store, run_name, monitor_name, target_col, wandb_run,
+):
+    """Extract metrics, save checkpoint/history/summary, log W&B artifacts."""
     maximize = metric_direction(training_metric_name(monitor_name))
     best_epoch, best_metric = extract_best_epoch(
         trainer.state.log_history,
@@ -432,15 +415,8 @@ def run_training(args, data_bundle=None, print_summary=True):
 
     best_path = os.path.join(model_store, f"{args.model}_best.pt")
     save_trainer_checkpoint(
-        best_path,
-        trainer,
-        args,
-        channels,
-        best_epoch,
-        best_metric,
-        monitor_name,
-        target_col,
-        regression_target_stats,
+        best_path, trainer, args, splits["channels"],
+        best_epoch, best_metric, monitor_name, target_col, datasets["target_stats"],
     )
 
     history_df = build_history_dataframe(trainer.state.log_history)
@@ -448,13 +424,13 @@ def run_training(args, data_bundle=None, print_summary=True):
     history_df.to_csv(history_path, index=False)
 
     train_metrics = predict_split_metrics(
-        trainer, train_ds, groups_tr, "train", metrics_computer
+        trainer, datasets["train_ds"], splits["groups_tr"], "train", metrics_computer
     )
     val_metrics = predict_split_metrics(
-        trainer, val_ds, groups_val, "val", metrics_computer
+        trainer, datasets["val_ds"], splits["groups_val"], "val", metrics_computer
     )
     test_metrics = predict_split_metrics(
-        trainer, test_ds, test_groups, "test", metrics_computer
+        trainer, datasets["test_ds"], splits["test_groups"], "test", metrics_computer
     )
 
     summary = {
@@ -466,7 +442,7 @@ def run_training(args, data_bundle=None, print_summary=True):
         "monitor": monitor_name,
         "task": args.task,
         "target_col": target_col,
-        "target_stats": regression_target_stats,
+        "target_stats": datasets["target_stats"],
         "train": train_metrics,
         "val": val_metrics,
         "test": test_metrics,
@@ -477,30 +453,53 @@ def run_training(args, data_bundle=None, print_summary=True):
 
     if wandb_run is not None:
         update_wandb_summary(
-            wandb_run,
-            args,
-            best_epoch,
-            best_metric,
-            train_metrics,
-            val_metrics,
-            test_metrics,
+            wandb_run, args, best_epoch, best_metric,
+            train_metrics, val_metrics, test_metrics,
         )
-        artifact = wandb.Artifact(
-            name=sanitize_wandb_artifact_name(f"{args.model}_{run_name}"),
-            type="model",
-            metadata={
-                "train_dir": args.train_dir,
-                "monitor": monitor_name,
-                "best_epoch": best_epoch,
-                "task": args.task,
-                "target_col": target_col,
-            },
+        log_wandb_artifacts(
+            wandb_run, args, run_name,
+            best_path, history_path, summary_path,
+            monitor_name, best_epoch, target_col,
         )
-        artifact.add_file(best_path)
-        artifact.add_file(history_path)
-        artifact.add_file(summary_path)
-        wandb.log_artifact(artifact)
-        wandb.finish()
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
+
+
+def run_training(args, data_bundle=None, print_summary=True):
+    """Run one recurrent-model training job and return its summary payload."""
+    if not isinstance(args, Namespace):
+        raise TypeError("run_training expects an argparse.Namespace.")
+
+    seed_everything(args.seed)
+    no_cuda = configure_runtime_device(args.device)
+
+    target_col = resolve_target_col(args)
+    args.target_col = target_col
+    if data_bundle is None:
+        data_bundle = load_data_bundle(args.train_dir, args.data_mode, target_col)
+
+    splits = _make_splits(args, data_bundle)
+    datasets = _prepare_datasets(args, splits)
+
+    run_name = args.run_name or datetime.now().strftime("%Y-%m-%d_%H:%M")
+    model_store = os.path.join(args.train_dir, f"deep_models_{run_name}")
+    os.makedirs(model_store, exist_ok=True)
+
+    wandb_run = _maybe_init_wandb(args, run_name, model_store, splits, datasets)
+    trainer, metrics_computer, monitor_name = _build_trainer(
+        args, splits, datasets, model_store, run_name, wandb_run, no_cuda,
+    )
+    trainer.train()
+
+    summary = _collect_and_save_results(
+        trainer, args, splits, datasets, metrics_computer,
+        model_store, run_name, monitor_name, target_col, wandb_run,
+    )
 
     if print_summary:
         print(f"Saved deep model artifacts to {model_store}")
