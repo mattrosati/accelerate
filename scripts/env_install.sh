@@ -32,7 +32,8 @@ mamba create --prefix "$PREFIX" -c conda-forge \
     dask-ml \
     umap-learn \
     scikit-learn \
-    seaborn
+    seaborn \
+    optuna
 conda activate "$PREFIX"
 
 # install additional packages
