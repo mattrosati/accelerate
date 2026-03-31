@@ -89,7 +89,7 @@ def build_parser(add_help=True):
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.2)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--bidirectional", action="store_true")
@@ -132,13 +132,13 @@ def build_parser(add_help=True):
     parser.add_argument(
         "--lr_scheduler_type",
         type=str,
-        default="linear",
+        default="cosine",
         help="Trainer scheduler type passed through to Hugging Face TrainingArguments.",
     )
     parser.add_argument(
         "--warmup_ratio",
         type=float,
-        default=0.0,
+        default=0.1,
         help="Optional warmup ratio for the Trainer-managed scheduler.",
     )
     parser.add_argument("--wandb_project", type=str, default="accelerate-deep")
@@ -560,6 +560,13 @@ def run_training(args, data_bundle=None, print_summary=True):
 def main():
     """CLI entrypoint for a single recurrent-model training run."""
     args = build_parser().parse_args()
+    if args.patient_balance == "none":
+        args.monitor = (
+            args.monitor.replace("patient_", "")
+            if "patient_" in args.monitor
+            else args.monitor
+        )
+
     run_training(args)
 
 
