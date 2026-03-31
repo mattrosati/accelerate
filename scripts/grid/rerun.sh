@@ -57,19 +57,19 @@ set -euo pipefail
 # Iterate over dataset dirs in TOTAL_DIR and run command for each
 shopt -s nullglob
 
-# Check if data mode is provided
-if [ -z "$1" ]; then
-  echo "Usage: $0 <parent data dir> <run name>"
-  exit 1
-fi
-# Check if run name is provided
-if [ -z "$2" ]; then
-  echo "Usage: $0 <parent data dir> <run name>"
-  exit 1
-fi
+# # Check if data mode is provided
+# if [ -z "$1" ]; then
+#   echo "Usage: $0 <parent data dir> <run name>"
+#   exit 1
+# fi
+# # Check if run name is provided
+# if [ -z "$2" ]; then
+#   echo "Usage: $0 <parent data dir> <run name>"
+#   exit 1
+# fi
 
-TOTAL_DIR="$1"
-RUN_NAME="$2"
+# TOTAL_DIR="$1"
+# RUN_NAME="$2"
 DATASET_DIRS=( "$TOTAL_DIR"/* )
 
 N=${#DATASET_DIRS[@]}
@@ -89,8 +89,8 @@ fi
 DATASET_DIR="${DATASET_DIRS[$TASK_ID]}"
 echo "Task ${TASK_ID}/${N}: DATASET_DIR=$DATASET_DIR"
 
-python -u src/design_feat.py -o --train_dir "$DATASET_DIR"
-python -u src/design_feat.py -o --train_dir "$DATASET_DIR" -w
+# python -u src/design_feat.py -o --train_dir "$DATASET_DIR"
+# python -u src/design_feat.py -o --train_dir "$DATASET_DIR" -w
 
 bash scripts/rapid_iter.sh "$DATASET_DIR" "$RUN_NAME"
 
