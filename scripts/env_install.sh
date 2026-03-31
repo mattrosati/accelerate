@@ -41,6 +41,11 @@ pip3 install torch torchvision torchaudio
 pip install accelerate datasets transformers
 pip install wandb
 
+pip install chronos-forecasting
+pip install git+https://github.com/moment-timeseries-foundation-model/moment.git
+
+conda export --file=environment.yml
+
 conda deactivate
 
 # to delete the environment, run:
