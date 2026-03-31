@@ -182,7 +182,21 @@ class MomentPredictor(nn.Module):
         d_model = _MOMENT_D_MODEL[moment_size]
 
         task_name = "classification" if task == "classification" else "embedding"
-        model_kwargs = {"task_name": task_name, "n_channels": n_channels}
+        model_kwargs = {
+            "task_name": task_name,
+            "n_channels": n_channels,
+            "freeze_encoder": freeze_backbone,  # Freeze the patch embedding layer
+            "freeze_embedder": freeze_backbone,  # Freeze the transformer encoder
+            "freeze_head": False,  # The linear forecasting head must be trained
+            ## NOTE: Disable gradient checkpointing to supress the warning when linear probing the model as MOMENT encoder is frozen
+            "enable_gradient_checkpointing": not freeze_backbone,
+            # Choose how embedding is obtained from the model: One of ['mean', 'concat']
+            # Multi-channel embeddings are obtained by either averaging or concatenating patch embeddings
+            # along the channel dimension. 'concat' results in embeddings of size (n_channels * d_model),
+            # while 'mean' results in embeddings of size (d_model)
+            "reduction": "mean",
+        }
+
         if task == "classification":
             model_kwargs["num_class"] = 2
 
@@ -191,10 +205,6 @@ class MomentPredictor(nn.Module):
             model_kwargs=model_kwargs,
         )
         self.moment.init()
-
-        if freeze_backbone:
-            for p in self.moment.encoder.parameters():
-                p.requires_grad = False
 
         self.regression_head = None
         if task != "classification":
