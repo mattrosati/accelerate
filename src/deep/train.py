@@ -64,7 +64,7 @@ def build_parser(add_help=True):
     parser.add_argument(
         "--data_mode",
         type=str,
-        choices=["raw", "design", "whiten"],
+        choices=["raw"],
         default="raw",
         help="Deep recurrent models currently operate on raw multivariate windows.",
     )
@@ -85,7 +85,7 @@ def build_parser(add_help=True):
     parser.add_argument("--fold_idx", type=int, default=0)
     parser.add_argument("--n_splits", type=int, default=5)
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.2)
