@@ -91,17 +91,16 @@ def suggest_trial_args(base_args, trial):
     trial_args.num_layers = trial.suggest_int("num_layers", 1, 3)
     trial_args.dropout = trial.suggest_float("dropout", 0.0, 0.5)
     trial_args.lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
-    trial_args.weight_decay = trial.suggest_float(
-        "weight_decay", 1e-6, 1e-2, log=True
-    )
+    trial_args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
     trial_args.batch_size = trial.suggest_categorical(
         "batch_size", trial_args.batch_size_choices
     )
-    trial_args.bidirectional = trial.suggest_categorical(
-        "bidirectional", [False, True]
-    )
+    trial_args.bidirectional = trial.suggest_categorical("bidirectional", [False, True])
     trial_args.grad_clip = trial.suggest_categorical(
         "grad_clip", trial_args.grad_clip_choices
+    )
+    trial_args.lr_scheduler_type = trial.suggest_categorical(
+        "lr_scheduler_type", ["cosine", "linear", "constant"]
     )
     trial_args.monitor = base_args.search_metric
     trial_args.run_name = f"{base_args.search_name}_trial_{trial.number:03d}"
@@ -166,7 +165,9 @@ def main():
     trials_df.to_csv(trials_path, index=False)
 
     completed_trials = [
-        trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
+        trial
+        for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE
     ]
     summary = {
         "search_name": args.search_name,

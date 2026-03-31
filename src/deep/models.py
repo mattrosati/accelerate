@@ -25,6 +25,7 @@ class RecurrentPredictor(nn.Module):
     ):
         super().__init__()
         self.task = task
+        self.input_dropout = nn.Dropout(dropout)
         recurrent_dropout = dropout if num_layers > 1 else 0.0
         self.rnn = rnn_type(
             input_size=input_dim,
@@ -52,6 +53,7 @@ class RecurrentPredictor(nn.Module):
 
     def _forward_logits(self, x):
         """Return one scalar prediction for each sequence window."""
+        x = self.input_dropout(x)
         _, hidden = self.rnn(x)
         if isinstance(hidden, tuple):
             hidden = hidden[0]

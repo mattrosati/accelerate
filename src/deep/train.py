@@ -359,6 +359,30 @@ def _maybe_init_wandb(args, run_name, model_store, splits, datasets):
     return wandb.init(**wandb_kwargs)
 
 
+def _log_split_diagnostics(args, splits):
+    """Print train/val distribution stats before training starts."""
+    n_train = len(splits["y_tr"])
+    n_val = len(splits["y_val"])
+    n_train_patients = int(np.unique(splits["groups_tr"]).shape[0])
+    n_val_patients = int(np.unique(splits["groups_val"]).shape[0])
+    print(f"--- Split diagnostics ---")
+    print(f"Train: {n_train} windows from {n_train_patients} patients")
+    print(f"Val:   {n_val} windows from {n_val_patients} patients")
+    if args.task == "classification":
+        train_pos = splits["y_tr"].sum()
+        val_pos = splits["y_val"].sum()
+        print(f"Train class balance: {train_pos/n_train:.3f} positive")
+        print(f"Val   class balance: {val_pos/n_val:.3f} positive")
+    else:
+        print(
+            f"Train target: mean={splits['y_tr'].mean():.4f}, std={splits['y_tr'].std():.4f}"
+        )
+        print(
+            f"Val   target: mean={splits['y_val'].mean():.4f}, std={splits['y_val'].std():.4f}"
+        )
+    print(f"-------------------------")
+
+
 def _build_trainer(args, splits, datasets, model_store, run_name, wandb_run, no_cuda):
     """Instantiate the model, metrics computer, and PatientBalancedTrainer."""
     model = _make_model(
@@ -535,6 +559,7 @@ def run_training(args, data_bundle=None, print_summary=True):
         wandb_run,
         no_cuda,
     )
+    _log_split_diagnostics(args, splits)
     trainer.train()
 
     summary = _collect_and_save_results(
