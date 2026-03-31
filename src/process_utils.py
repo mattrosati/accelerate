@@ -201,7 +201,11 @@ def extract_proportions_smooth(windows, labels, percentage, ref, config):
             continue
 
         # if there's missing data in the LA calculation, label is na
-        if lower_limits.isna().any() or upper_limits.isna().any() or mapopt.isna().any():
+        if (
+            lower_limits.isna().any()
+            or upper_limits.isna().any()
+            or mapopt.isna().any()
+        ):
             in_out[i] = np.nan
             frac_out_arr[i] = np.nan
             mapopt_arr[i] = np.nan
@@ -322,7 +326,7 @@ def extract_proportions_count(windows, labels, percentage=0.5):
 
         proportion_gap = w["overlap_len"] / w["total_length"]
 
-        if (proportion_in - proportion_out) < proportion_na + proportion_gap:
+        if abs(proportion_in - proportion_out) < proportion_na + proportion_gap:
             in_out[i] = np.nan
             # write na
         else:
