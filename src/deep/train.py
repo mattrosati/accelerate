@@ -86,7 +86,7 @@ def build_parser(add_help=True):
     parser.add_argument("--fold_idx", type=int, default=0)
     parser.add_argument("--n_splits", type=int, default=5)
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--hidden_dim", type=int, default=128)
     parser.add_argument("--num_layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.2)
@@ -98,7 +98,7 @@ def build_parser(add_help=True):
         "--moment_size",
         type=str,
         choices=["small", "base", "large"],
-        default="large",
+        default="base",
         help="MOMENT model size (only used when --model=moment).",
     )
     parser.add_argument(
@@ -111,7 +111,7 @@ def build_parser(add_help=True):
         "--patient_balance",
         type=str,
         choices=["none", "sampler"],
-        default="sampler",
+        default="none",
         help="Sampler mode to equalize per-patient contribution during training.",
     )
     parser.add_argument("--num_workers", type=int, default=0)
@@ -124,7 +124,7 @@ def build_parser(add_help=True):
     parser.add_argument(
         "--early_stopping_patience",
         type=int,
-        default=0,
+        default=10,
         help="Max number of epochs without validation improvement. Defaults to no early stopping.",
     )
     parser.add_argument(
