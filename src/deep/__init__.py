@@ -7,6 +7,6 @@ The package is intentionally small:
 - ``train`` provides the CLI entrypoint and training orchestration
 """
 
-from .models import GRUClassifier, LSTMClassifier
+from .models import GRUClassifier, LSTMClassifier, MomentPredictor
 
-__all__ = ["LSTMClassifier", "GRUClassifier"]
+__all__ = ["LSTMClassifier", "GRUClassifier", "MomentPredictor"]

@@ -5,6 +5,7 @@ hyperparameter search can share the same data loading, grouped split, metrics,
 checkpointing, and W&B logging paths.
 """
 
+import argparse
 import json
 import os
 import random
@@ -44,7 +45,7 @@ from deep.metrics import (  # noqa: E402
     resolve_monitor,
     training_metric_name,
 )
-from deep.models import GRUClassifier, LSTMClassifier  # noqa: E402
+from deep.models import GRUClassifier, LSTMClassifier, MomentPredictor  # noqa: E402
 from deep.trainer import (  # noqa: E402
     PatientBalancedTrainer,
     build_training_arguments,
@@ -58,7 +59,7 @@ def build_parser(add_help=True):
     parser.add_argument(
         "--model",
         type=str,
-        choices=["lstm", "gru"],
+        choices=["lstm", "gru", "moment"],
         required=True,
     )
     parser.add_argument(
@@ -93,6 +94,19 @@ def build_parser(add_help=True):
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--bidirectional", action="store_true")
+    parser.add_argument(
+        "--moment_size",
+        type=str,
+        choices=["small", "base", "large"],
+        default="large",
+        help="MOMENT model size (only used when --model=moment).",
+    )
+    parser.add_argument(
+        "--moment_freeze_backbone",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Freeze MOMENT encoder weights, training only the task head.",
+    )
     parser.add_argument(
         "--patient_balance",
         type=str,
@@ -217,8 +231,17 @@ def load_data_bundle(train_dir, data_mode, target_col):
 # ---------------------------------------------------------------------------
 
 
-def _make_model(args, input_dim, pos_weight=None):
-    """Instantiate the requested recurrent predictor from CLI args."""
+def _make_model(args, input_dim, pos_weight=None, seq_len=None):
+    """Instantiate the requested predictor from CLI args."""
+    if args.model == "moment":
+        return MomentPredictor(
+            n_channels=input_dim,
+            seq_len=seq_len,
+            task=args.task,
+            pos_weight=pos_weight,
+            moment_size=args.moment_size,
+            freeze_backbone=args.moment_freeze_backbone,
+        )
     kwargs = {
         "input_dim": input_dim,
         "hidden_dim": args.hidden_dim,
@@ -386,7 +409,10 @@ def _log_split_diagnostics(args, splits):
 def _build_trainer(args, splits, datasets, model_store, run_name, wandb_run, no_cuda):
     """Instantiate the model, metrics computer, and PatientBalancedTrainer."""
     model = _make_model(
-        args, input_dim=splits["input_dim"], pos_weight=datasets["pos_weight"]
+        args,
+        input_dim=splits["input_dim"],
+        pos_weight=datasets["pos_weight"],
+        seq_len=splits["X_tr"].shape[1],
     )
     monitor_name = resolve_monitor(args.task, args.monitor, y_val=splits["y_val"])
 

@@ -85,17 +85,32 @@ def build_search_parser():
 def suggest_trial_args(base_args, trial):
     """Copy base args and overwrite trainable hyperparameters for one trial."""
     trial_args = Namespace(**vars(deepcopy(base_args)))
-    trial_args.hidden_dim = trial.suggest_categorical(
-        "hidden_dim", trial_args.hidden_dim_choices
-    )
-    trial_args.num_layers = trial.suggest_int("num_layers", 1, 3)
+
+    is_moment = base_args.model == "moment"
+
+    if is_moment:
+        trial_args.moment_size = trial.suggest_categorical(
+            "moment_size", ["small", "base", "large"]
+        )
+        trial_args.moment_freeze_backbone = trial.suggest_categorical(
+            "moment_freeze_backbone", [True, False]
+        )
+        trial_args.lr = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
+    else:
+        trial_args.hidden_dim = trial.suggest_categorical(
+            "hidden_dim", trial_args.hidden_dim_choices
+        )
+        trial_args.num_layers = trial.suggest_int("num_layers", 1, 3)
+        trial_args.bidirectional = trial.suggest_categorical(
+            "bidirectional", [False, True]
+        )
+        trial_args.lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
+
     trial_args.dropout = trial.suggest_float("dropout", 0.0, 0.5)
-    trial_args.lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
     trial_args.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
     trial_args.batch_size = trial.suggest_categorical(
         "batch_size", trial_args.batch_size_choices
     )
-    trial_args.bidirectional = trial.suggest_categorical("bidirectional", [False, True])
     trial_args.grad_clip = trial.suggest_categorical(
         "grad_clip", trial_args.grad_clip_choices
     )

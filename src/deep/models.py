@@ -1,6 +1,7 @@
-"""Recurrent neural network predictors used by the deep training CLI."""
+"""Neural network predictors used by the deep training CLI."""
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 
@@ -140,3 +141,120 @@ class GRUClassifier(RecurrentPredictor):
             task=task,
             pos_weight=pos_weight,
         )
+
+
+# ---------------------------------------------------------------------------
+# MOMENT foundation model wrapper
+# ---------------------------------------------------------------------------
+
+_MOMENT_D_MODEL = {"small": 512, "base": 768, "large": 1024}
+_MOMENT_SEQ_LEN = 512
+
+
+class MomentPredictor(nn.Module):
+    """MOMENT foundation model wrapper matching the RecurrentPredictor interface.
+
+    Classification: uses MOMENT's built-in 2-class head, converts to scalar
+    logit for BCEWithLogitsLoss compatibility.
+    Regression: uses MOMENT in embedding mode with a custom linear head.
+    """
+
+    def __init__(
+        self,
+        n_channels,
+        seq_len,
+        task="classification",
+        pos_weight=None,
+        moment_size="large",
+        freeze_backbone=True,
+    ):
+        super().__init__()
+        from momentfm import MOMENTPipeline
+
+        if seq_len > _MOMENT_SEQ_LEN:
+            raise ValueError(
+                f"MOMENT supports max {_MOMENT_SEQ_LEN} timesteps but got {seq_len}. "
+                "Use a shorter window size (≤512s at 1Hz)."
+            )
+
+        self.task = task
+        self.seq_len = seq_len
+        d_model = _MOMENT_D_MODEL[moment_size]
+
+        task_name = "classification" if task == "classification" else "embedding"
+        model_kwargs = {"task_name": task_name, "n_channels": n_channels}
+        if task == "classification":
+            model_kwargs["num_class"] = 2
+
+        self.moment = MOMENTPipeline.from_pretrained(
+            f"AutonLab/MOMENT-1-{moment_size}",
+            model_kwargs=model_kwargs,
+        )
+        self.moment.init()
+
+        if freeze_backbone:
+            for p in self.moment.encoder.parameters():
+                p.requires_grad = False
+
+        self.regression_head = None
+        if task != "classification":
+            self.regression_head = nn.Linear(d_model, 1)
+
+        if pos_weight is None:
+            self.register_buffer("pos_weight", None)
+        else:
+            self.register_buffer(
+                "pos_weight",
+                torch.tensor([float(pos_weight)], dtype=torch.float32),
+            )
+
+    def _pad_to_moment(self, x):
+        """Reshape and pad input for MOMENT.
+
+        Args:
+            x: ``[batch, timesteps, channels]``
+
+        Returns:
+            padded: ``[batch, channels, 512]``
+            mask: ``[batch, 512]`` with 1 for real positions, 0 for padding.
+        """
+        batch, t, c = x.shape
+        # MOMENT expects [batch, n_channels, seq_len]
+        x = x.transpose(1, 2)  # [batch, channels, timesteps]
+        pad_len = _MOMENT_SEQ_LEN - t
+        if pad_len > 0:
+            x = F.pad(x, (0, pad_len))  # pad last dim (time)
+        mask = torch.zeros(batch, _MOMENT_SEQ_LEN, device=x.device, dtype=x.dtype)
+        mask[:, :t] = 1.0
+        return x, mask
+
+    def forward(self, features=None, labels=None, x=None):
+        """Support both Trainer-style dict inputs and direct tensor calls."""
+        if features is None:
+            features = x
+        if features is None:
+            raise ValueError("Expected `features` or `x` input for MOMENT model.")
+
+        padded, mask = self._pad_to_moment(features)
+        output = self.moment(x_enc=padded, input_mask=mask)
+
+        if self.task == "classification":
+            # MOMENT returns [batch, 2] logits; convert to scalar for BCE
+            logits = output.logits[:, 1] - output.logits[:, 0]
+        else:
+            # Embedding mode: [batch, d_model] → scalar
+            logits = self.regression_head(output.embeddings).squeeze(-1)
+
+        if labels is None:
+            return logits
+
+        labels = labels.to(logits.dtype)
+        if self.task == "classification":
+            loss_fn = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
+        else:
+            loss_fn = nn.MSELoss()
+
+        return {
+            "loss": loss_fn(logits, labels),
+            "logits": logits,
+        }
