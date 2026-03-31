@@ -340,7 +340,7 @@ def extract_proportions_count(windows, labels, percentage=0.5):
 
 
 def filter_na(window):
-    # imputes missing values given a window according to the specified strategy
+    # filters out windows that have too many nas.
     if PERCENT_NA_MAX == 1:
         return window
     if np.isnan(window).sum() / len(window) > PERCENT_NA_MAX:
@@ -362,7 +362,7 @@ def impute(window, strategy="lin_interpolate"):
             return None
         window = np.interp(x=x_coords, xp=x_coords[~np.isnan(window)], fp=w_vals)
     else:
-        pass  # implement other strategies as needed
+        pass  # implement other strategies as desired
     return window
 
 

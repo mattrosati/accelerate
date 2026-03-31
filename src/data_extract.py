@@ -95,6 +95,14 @@ def normalize(
 
         scaled_values = scaler.fit_transform(z_arr)
 
+        # replaced outlies with nans, remove window if too many outliers
+        col_std = np.sqrt(scaler.var_[0])
+        col_mean = scaler.mean_[0]
+        outlier_mask = np.abs(z_arr - col_mean) >= 3 * col_std
+        scaled_values[outlier_mask] = np.nan
+
+        # TODO: remove if too many nans
+
         scaled_values = scaled_values.reshape(orig_shape)
 
         dump(scaler, open(scaler_store, "wb"))
@@ -127,6 +135,9 @@ def normalize(
 
         scaled_values = scaled_values.reshape(orig_shape)
         scaled_values = da.from_array(scaled_values)
+
+        outlier_mask = np.abs(z_arr - col_mean) >= 3 * col_std
+        scaled_values[outlier_mask] = np.nan
 
         # impute everything for test
         scaled_values = da.map_blocks(
@@ -699,8 +710,8 @@ if __name__ == "__main__":
     print("")
 
     # preprocess dataset
-    # normalize (imputation already done)
-    print("Normalizing:")
+    # normalize, remove 3 SD values, and impute
+    print("Normalizing, removing outliers, and imputing missing values:")
     normalize(save_dir, args.variables, scaler_mode=args.scaler)
 
     # generates final base dataset
