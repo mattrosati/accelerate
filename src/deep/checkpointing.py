@@ -63,26 +63,26 @@ def update_wandb_summary(
         }
     )
     if args.task == "classification":
-        wandb.summary.update(
-            {
-                "final_train_auc": train_metrics["auc"],
-                "final_val_auc": val_metrics["auc"],
-                "final_val_patient_auc": val_metrics["patient_auc"],
-                "final_test_auc": test_metrics["auc"],
-                "final_test_patient_auc": test_metrics["patient_auc"],
-            }
-        )
+        summary = {
+            "final_train_auc": train_metrics["auc"],
+            "final_val_auc": val_metrics["auc"],
+            "final_test_auc": test_metrics["auc"],
+        }
+        if "patient_auc" in val_metrics:
+            summary["final_val_patient_auc"] = val_metrics["patient_auc"]
+            summary["final_test_patient_auc"] = test_metrics["patient_auc"]
+        wandb.summary.update(summary)
         return
 
-    wandb.summary.update(
-        {
-            "final_train_rmse": train_metrics["rmse"],
-            "final_val_rmse": val_metrics["rmse"],
-            "final_val_patient_rmse": val_metrics["patient_rmse"],
-            "final_test_rmse": test_metrics["rmse"],
-            "final_test_patient_rmse": test_metrics["patient_rmse"],
-        }
-    )
+    summary = {
+        "final_train_rmse": train_metrics["rmse"],
+        "final_val_rmse": val_metrics["rmse"],
+        "final_test_rmse": test_metrics["rmse"],
+    }
+    if "patient_rmse" in val_metrics:
+        summary["final_val_patient_rmse"] = val_metrics["patient_rmse"]
+        summary["final_test_patient_rmse"] = test_metrics["patient_rmse"]
+    wandb.summary.update(summary)
 
 
 def log_wandb_artifacts(

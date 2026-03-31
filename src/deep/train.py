@@ -259,7 +259,9 @@ def _prepare_targets(args, y_tr, y_val, test_y):
     pos_count = y_tr.sum()
     neg_count = len(y_tr) - pos_count
     if pos_count == 0 or neg_count == 0:
-        raise ValueError("Training fold must contain both positive and negative examples.")
+        raise ValueError(
+            "Training fold must contain both positive and negative examples."
+        )
     return y_tr, y_val, test_y, None, (neg_count / pos_count)
 
 
@@ -307,7 +309,10 @@ def _make_splits(args, data_bundle):
 def _prepare_datasets(args, splits):
     """Build HF datasets and resolve task-specific target transforms."""
     y_tr_model, y_val_model, test_y_model, target_stats, pos_weight = _prepare_targets(
-        args, splits["y_tr"], splits["y_val"], splits["test_y"],
+        args,
+        splits["y_tr"],
+        splits["y_val"],
+        splits["test_y"],
     )
     train_ds = build_hf_dataset(splits["X_tr"], y_tr_model)
     val_ds = build_hf_dataset(splits["X_val"], y_val_model)
@@ -356,11 +361,15 @@ def _maybe_init_wandb(args, run_name, model_store, splits, datasets):
 
 def _build_trainer(args, splits, datasets, model_store, run_name, wandb_run, no_cuda):
     """Instantiate the model, metrics computer, and PatientBalancedTrainer."""
-    model = _make_model(args, input_dim=splits["input_dim"], pos_weight=datasets["pos_weight"])
+    model = _make_model(
+        args, input_dim=splits["input_dim"], pos_weight=datasets["pos_weight"]
+    )
     monitor_name = resolve_monitor(args.task, args.monitor, y_val=splits["y_val"])
 
     metrics_computer = GroupAwareMetricsComputer(
-        args.task, target_stats=datasets["target_stats"],
+        args.task,
+        target_stats=datasets["target_stats"],
+        patient_balance=args.patient_balance != "none",
     )
     metrics_computer.set_groups(splits["groups_val"])
 
@@ -400,8 +409,16 @@ def _build_trainer(args, splits, datasets, model_store, run_name, wandb_run, no_
 
 
 def _collect_and_save_results(
-    trainer, args, splits, datasets, metrics_computer,
-    model_store, run_name, monitor_name, target_col, wandb_run,
+    trainer,
+    args,
+    splits,
+    datasets,
+    metrics_computer,
+    model_store,
+    run_name,
+    monitor_name,
+    target_col,
+    wandb_run,
 ):
     """Extract metrics, save checkpoint/history/summary, log W&B artifacts."""
     maximize = metric_direction(training_metric_name(monitor_name))
@@ -415,8 +432,15 @@ def _collect_and_save_results(
 
     best_path = os.path.join(model_store, f"{args.model}_best.pt")
     save_trainer_checkpoint(
-        best_path, trainer, args, splits["channels"],
-        best_epoch, best_metric, monitor_name, target_col, datasets["target_stats"],
+        best_path,
+        trainer,
+        args,
+        splits["channels"],
+        best_epoch,
+        best_metric,
+        monitor_name,
+        target_col,
+        datasets["target_stats"],
     )
 
     history_df = build_history_dataframe(trainer.state.log_history)
@@ -453,13 +477,24 @@ def _collect_and_save_results(
 
     if wandb_run is not None:
         update_wandb_summary(
-            wandb_run, args, best_epoch, best_metric,
-            train_metrics, val_metrics, test_metrics,
+            wandb_run,
+            args,
+            best_epoch,
+            best_metric,
+            train_metrics,
+            val_metrics,
+            test_metrics,
         )
         log_wandb_artifacts(
-            wandb_run, args, run_name,
-            best_path, history_path, summary_path,
-            monitor_name, best_epoch, target_col,
+            wandb_run,
+            args,
+            run_name,
+            best_path,
+            history_path,
+            summary_path,
+            monitor_name,
+            best_epoch,
+            target_col,
         )
 
     return summary
@@ -492,13 +527,27 @@ def run_training(args, data_bundle=None, print_summary=True):
 
     wandb_run = _maybe_init_wandb(args, run_name, model_store, splits, datasets)
     trainer, metrics_computer, monitor_name = _build_trainer(
-        args, splits, datasets, model_store, run_name, wandb_run, no_cuda,
+        args,
+        splits,
+        datasets,
+        model_store,
+        run_name,
+        wandb_run,
+        no_cuda,
     )
     trainer.train()
 
     summary = _collect_and_save_results(
-        trainer, args, splits, datasets, metrics_computer,
-        model_store, run_name, monitor_name, target_col, wandb_run,
+        trainer,
+        args,
+        splits,
+        datasets,
+        metrics_computer,
+        model_store,
+        run_name,
+        monitor_name,
+        target_col,
+        wandb_run,
     )
 
     if print_summary:

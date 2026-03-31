@@ -129,16 +129,18 @@ def metric_or_default(value, maximize):
 # ---------------------------------------------------------------------------
 
 
-def compute_metrics(loss, y_true, y_prob, y_pred, groups):
+def compute_metrics(loss, y_true, y_prob, y_pred, groups, patient_balance=True):
     """Compute window-level and patient-balanced binary classification metrics."""
     if y_true.size == 0:
-        return {
+        metrics = {
             "loss": float(loss),
             "auc": np.nan,
             "balanced_accuracy": np.nan,
-            "patient_balanced_accuracy": np.nan,
-            "patient_auc": np.nan,
         }
+        if patient_balance:
+            metrics["patient_balanced_accuracy"] = np.nan
+            metrics["patient_auc"] = np.nan
+        return metrics
 
     metrics = {
         "loss": float(loss),
@@ -148,57 +150,64 @@ def compute_metrics(loss, y_true, y_prob, y_pred, groups):
     if np.unique(y_true).shape[0] > 1:
         metrics["auc"] = roc_auc_score(y_true, y_prob)
 
-    patient_weights = make_patient_weights(groups)
-    metrics["patient_balanced_accuracy"] = np.nan
-    if patient_weights.size > 0:
-        metrics["patient_balanced_accuracy"] = balanced_accuracy_score(
-            y_true, y_pred, sample_weight=patient_weights
-        )
-    metrics["patient_auc"] = np.nan
-    if patient_weights.size > 0 and np.unique(y_true).shape[0] > 1:
-        metrics["patient_auc"] = roc_auc_score(
-            y_true, y_prob, sample_weight=patient_weights
-        )
+    if patient_balance:
+        patient_weights = make_patient_weights(groups)
+        metrics["patient_balanced_accuracy"] = np.nan
+        if patient_weights.size > 0:
+            metrics["patient_balanced_accuracy"] = balanced_accuracy_score(
+                y_true, y_pred, sample_weight=patient_weights
+            )
+        metrics["patient_auc"] = np.nan
+        if patient_weights.size > 0 and np.unique(y_true).shape[0] > 1:
+            metrics["patient_auc"] = roc_auc_score(
+                y_true, y_prob, sample_weight=patient_weights
+            )
 
     return metrics
 
 
-def compute_regression_metrics(loss, y_true, y_pred, groups):
+def compute_regression_metrics(loss, y_true, y_pred, groups, patient_balance=True):
     """Compute window-level and patient-balanced regression metrics."""
     if y_true.size == 0:
-        return {
+        metrics = {
             "loss": float(loss),
             "mae": np.nan,
             "rmse": np.nan,
             "r2": np.nan,
-            "patient_mae": np.nan,
-            "patient_rmse": np.nan,
-            "patient_r2": np.nan,
         }
+        if patient_balance:
+            metrics["patient_mae"] = np.nan
+            metrics["patient_rmse"] = np.nan
+            metrics["patient_r2"] = np.nan
+        return metrics
 
-    patient_weights = make_patient_weights(groups)
     metrics = {
         "loss": float(loss),
         "mae": mean_absolute_error(y_true, y_pred),
         "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
         "r2": np.nan,
-        "patient_mae": np.nan,
-        "patient_rmse": np.nan,
-        "patient_r2": np.nan,
     }
     if y_true.shape[0] > 1 and np.unique(y_true).shape[0] > 1:
         metrics["r2"] = r2_score(y_true, y_pred)
-    if patient_weights.size > 0:
-        metrics["patient_mae"] = mean_absolute_error(
-            y_true, y_pred, sample_weight=patient_weights
-        )
-        metrics["patient_rmse"] = float(
-            np.sqrt(mean_squared_error(y_true, y_pred, sample_weight=patient_weights))
-        )
-        if y_true.shape[0] > 1 and np.unique(y_true).shape[0] > 1:
-            metrics["patient_r2"] = r2_score(
+
+    if patient_balance:
+        patient_weights = make_patient_weights(groups)
+        metrics["patient_mae"] = np.nan
+        metrics["patient_rmse"] = np.nan
+        metrics["patient_r2"] = np.nan
+        if patient_weights.size > 0:
+            metrics["patient_mae"] = mean_absolute_error(
                 y_true, y_pred, sample_weight=patient_weights
             )
+            metrics["patient_rmse"] = float(
+                np.sqrt(
+                    mean_squared_error(y_true, y_pred, sample_weight=patient_weights)
+                )
+            )
+            if y_true.shape[0] > 1 and np.unique(y_true).shape[0] > 1:
+                metrics["patient_r2"] = r2_score(
+                    y_true, y_pred, sample_weight=patient_weights
+                )
 
     return metrics
 
@@ -211,9 +220,10 @@ def compute_regression_metrics(loss, y_true, y_pred, groups):
 class GroupAwareMetricsComputer:
     """Compute metrics for Trainer while preserving patient grouping."""
 
-    def __init__(self, task, target_stats=None):
+    def __init__(self, task, target_stats=None, patient_balance=True):
         self.task = task
         self.target_stats = target_stats
+        self.patient_balance = patient_balance
         self.groups = np.array([], dtype=str)
         self.last_outputs = {}
 
@@ -241,7 +251,9 @@ class GroupAwareMetricsComputer:
                 "y_pred": y_pred,
                 "y_prob": y_prob,
             }
-            metrics = compute_metrics(np.nan, y_true, y_prob, y_pred, self.groups)
+            metrics = compute_metrics(
+                np.nan, y_true, y_prob, y_pred, self.groups, self.patient_balance
+            )
         else:
             y_true = labels.astype(np.float64)
             y_pred = predictions.astype(np.float64)
@@ -252,7 +264,9 @@ class GroupAwareMetricsComputer:
                 "y_true": y_true,
                 "y_pred": y_pred,
             }
-            metrics = compute_regression_metrics(np.nan, y_true, y_pred, self.groups)
+            metrics = compute_regression_metrics(
+                np.nan, y_true, y_pred, self.groups, self.patient_balance
+            )
 
         metrics.pop("loss", None)
         return metrics
