@@ -125,7 +125,7 @@ def build_parser(add_help=True):
         "--early_stopping_patience",
         type=int,
         default=10,
-        help="Max number of epochs without validation improvement. Defaults to no early stopping.",
+        help="Max number of epochs without validation improvement. Defaults to 10.",
     )
     parser.add_argument(
         "--monitor",
