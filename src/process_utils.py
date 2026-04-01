@@ -470,6 +470,15 @@ def get_windows_var(v, ptid, window_index, window_s, config):
     percentage = config.percentage
     chop = config.chop
 
+    if strategy == "smooth" and window_s <= 60:
+        import warnings
+
+        warnings.warn(
+            f"Smooth strategy with {window_s}s window produces only 1 label per window, "
+            f"making it functionally identical to mean strategy.",
+            stacklevel=2,
+        )
+
     with h5py.File(file_path, "r") as f:
         # load labels[targets] and var timeseries
         labels = pd.DataFrame(f[f"{ptid}/labels"][...][TARGETS + ["DateTime"]])
@@ -572,10 +581,19 @@ def get_windows_var(v, ptid, window_index, window_s, config):
             assert len(df) == labels.shape[0]
             if strategy == "smooth":
                 df2 = []
+                n_dropped = 0
                 for i, d in enumerate(df):
                     if labels["start_idx"].iloc[i] in labels.index:
                         d = np.append(d, i)
                         df2.append([d])
+                    else:
+                        n_dropped += 1
+                if n_dropped > 0:
+                    print(
+                        f"ptid {ptid}, var {v}: dropped {n_dropped}/{len(df)} "
+                        f"windows ({100 * n_dropped / len(df):.1f}%) due to "
+                        f"start_idx not in label index"
+                    )
                 if len(df2) == 0:
                     print(f"no windows for ptid {ptid}")
                     return None, None

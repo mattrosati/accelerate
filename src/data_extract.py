@@ -390,7 +390,7 @@ def finalize(variables, split_dict, save_dir):
             print(f"Finalizing {v} for split {s}:")
             for i, p in tqdm(enumerate(ptids), total=len(ptids)):
                 zarr_pt_store = os.path.join(save_dir, "temp", v, p, "x.zarr")
-                labels_pt_store = os.path.join(temp_dir, f"{p}_combined_labels.pkl")
+                labels_pt_store = os.path.join(save_dir, "temp", f"{p}_combined_labels.pkl")
 
                 labels_df = pd.read_pickle(labels_pt_store)
 
