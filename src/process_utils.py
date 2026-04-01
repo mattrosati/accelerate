@@ -619,14 +619,12 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                 print(nan_status)
                 print(ptid)
 
-            labels = labels.iloc[
-                [i for i, w in enumerate(windows) if w["w"] is not None]
-            ]
-            df = df[[i for i, w in enumerate(windows) if w["w"] is not None]]
+            keep_idx = [i for i, w in enumerate(windows) if w["w"] is not None]
+            labels = labels.iloc[keep_idx]
+            df = df[keep_idx]
 
             # extract proportion_in T/F data
             if v == "abp":
-                keep_idx = [i for i, w in enumerate(windows) if w["w"] is not None]
                 targets = {k: v[keep_idx] for k, v in targets.items()}
 
                 # drop ref

@@ -12,29 +12,17 @@ import zarr
 import dask.array as da
 
 from ray import tune
-from tuner import train_cv
+from tuner import train_cv, predict_scores as _predict_scores
 
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 
-
-def make_patient_weights(groups):
-    """Give each patient equal total influence in evaluation metrics."""
-    groups = np.asarray(groups)
-    unique_groups, counts = np.unique(groups, return_counts=True)
-    count_map = dict(zip(unique_groups, counts))
-    weights = np.array([1.0 / count_map[g] for g in groups], dtype=float)
-    return weights * (len(weights) / weights.sum())
+from patient_utils import make_patient_weights, infer_base_ptid
 
 
 def predict_scores(estimator, X):
-    """Return probability-like scores and hard predictions for one estimator."""
-    if hasattr(estimator, "predict_proba"):
-        y_prob = estimator.predict_proba(X)[:, 1]
-        y_pred = (y_prob >= 0.5).astype(int)
-    else:
-        y_prob = estimator.decision_function(X)
-        y_pred = (y_prob >= 0).astype(int)
-    return y_prob, y_pred
+    """Return (y_prob, y_pred) for backward-compat with eval call sites."""
+    scores, threshold = _predict_scores(estimator, X)
+    return scores, (scores >= threshold).astype(int)
 
 
 if __name__ == "__main__":
@@ -97,12 +85,7 @@ if __name__ == "__main__":
             os.path.join(args.train_dir, "permanent", "test", "labels.pkl")
         )
         y = labels["in?"].astype(int)
-        if "base_ptid" in labels.columns:
-            groups = labels["base_ptid"].astype(str).to_numpy()
-        else:
-            # Keep evaluation compatible with datasets generated before the
-            # explicit base patient id column was added.
-            groups = labels["ptid"].astype(str).str.split("_").str[0].to_numpy()
+        groups = infer_base_ptid(labels)
         patient_weights = make_patient_weights(groups)
 
         # loop over directory of models

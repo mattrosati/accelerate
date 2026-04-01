@@ -58,176 +58,197 @@ def do_tests(X):
     return
 
 
+def _scale_and_mark_outliers(z_arr_flat, v, scaler_mode):
+    """Fit (or select) scaler, transform, and mark 3-SD outliers as NaN.
+
+    Parameters
+    ----------
+    z_arr_flat : np.ndarray, shape (-1, 1)
+        Flattened raw values for one variable.
+    v : str
+        Variable name (needed for spo2 flip).
+    scaler_mode : str or None
+        "robust" or None (standard/power).
+
+    Returns
+    -------
+    scaler, scaled_values (with outliers as NaN), col_mean, col_std
+    """
+    if scaler_mode == "robust":
+        if v == "spo2":
+            z_arr_flat = 100.0 - z_arr_flat
+        scaler = RobustScaler(quantile_range=(10.0, 90.0))
+    else:
+        if v == "spo2":
+            scaler = PowerTransformer()
+            z_arr_flat = 100.0 - z_arr_flat
+        else:
+            scaler = StandardScaler()
+
+    scaled = scaler.fit_transform(z_arr_flat)
+
+    col_std = np.sqrt(scaler.var_[0])
+    col_mean = scaler.mean_[0]
+    outlier_mask = np.abs(z_arr_flat - col_mean) >= 3 * col_std
+    scaled[outlier_mask] = np.nan
+
+    return scaler, scaled, col_mean, col_std
+
+
+def _graph_norm_effect(
+    raw_samples, scaled_arr, v, split_label, img_dir, n_samples=100_000
+):
+    """Plot before/after normalization histograms for one variable + split."""
+    sampled_pre = np.random.choice(raw_samples, size=min(n_samples, len(raw_samples)), replace=False)
+    flat_scaled = scaled_arr.ravel()
+    sampled_post = np.random.choice(flat_scaled, size=min(n_samples, len(flat_scaled)), replace=False)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    sns.histplot(sampled_pre, ax=axes[0], stat="probability", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+    axes[0].set_title("Before Normalization")
+    axes[0].set_xlabel(f"{v}")
+    sns.histplot(sampled_post, ax=axes[1], stat="probability", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+    axes[1].set_title("After Normalization")
+    axes[1].set_xlabel(f"{v}")
+    fig.suptitle(f"Effect of normalization on {v} ({split_label})")
+    plt.savefig(os.path.join(img_dir, f"{v}_norm_effect_{split_label.lower().replace(' ', '_')}.png"))
+    plt.close()
+
+
 def normalize(
     save_dir,
     variables,
     img_dir="/home/mr2238/project_pi_np442/mr2238/accelerate/imgs/normalize_impute_rs_new",
     graph=False,
     scaler_mode=None,
+    na_threshold=PERCENT_NA_MAX,
 ):
-    n_samples = 100_000
     os.makedirs(img_dir, exist_ok=True)
-    for v in tqdm(variables):
+
+    # Collect raw samples per variable for optional graphing
+    graph_samples = {}  # (v, split) -> raw_samples array
+
+    # ------------------------------------------------------------------
+    # PHASE 1: Scale and mark outliers (no imputation yet)
+    # ------------------------------------------------------------------
+    print("  Phase 1: scaling and marking outliers...")
+    for v in tqdm(variables, desc="scale+outlier"):
         z_arr_store = os.path.join(save_dir, "train", f"{v}_x.zarr")
         scaler_store = os.path.join(save_dir, "scalers", f"{v}_scaler.pkl")
         z_arr = da.from_zarr(z_arr_store)
-
-        # find the scales
         z_arr = z_arr.rechunk({1: z_arr.shape[1]})
-
         orig_shape = z_arr.shape
-        z_arr = z_arr.reshape(-1, 1).compute()
+        z_arr_flat = z_arr.reshape(-1, 1).compute()
 
-        if scaler_mode == "robust":
-            if v == "spo2":
-                # flip tail
-                z_arr = 100.0 - z_arr
-            scaler = RobustScaler(quantile_range=(10.0, 90.0))
+        if graph:
+            graph_samples[(v, "train")] = z_arr_flat.ravel().copy()
 
-        else:
-            if v == "spo2":
-                # flip tail, then box cox normalization
-                scaler = PowerTransformer()
-                z_arr = 100.0 - z_arr
-            else:
-                # for others, do classic normalization
-                scaler = StandardScaler()
-
-        scaled_values = scaler.fit_transform(z_arr)
-
-        # replaced outlies with nans, remove window if too many outliers
-        col_std = np.sqrt(scaler.var_[0])
-        col_mean = scaler.mean_[0]
-        outlier_mask = np.abs(z_arr - col_mean) >= 3 * col_std
-        scaled_values[outlier_mask] = np.nan
-
-        # TODO: remove if too many nans
-
-        scaled_values = scaled_values.reshape(orig_shape)
-
+        scaler, scaled, col_mean, col_std = _scale_and_mark_outliers(
+            z_arr_flat, v, scaler_mode
+        )
+        scaled = scaled.reshape(orig_shape)
         dump(scaler, open(scaler_store, "wb"))
-        scaled_values = da.from_array(scaled_values)
-
-        # impute everything for train
-        scaled_values = da.map_blocks(
-            lambda block: np.apply_along_axis(impute, axis=1, arr=block),
-            scaled_values,
-            dtype=scaled_values.dtype,
-        )
-        assert not da.isnan(scaled_values).any().compute()
-        t_scaled_values = scaled_values
         da.to_zarr(
-            scaled_values, url=os.path.join(save_dir, "train", f"{v}_x_scaled.zarr")
+            da.from_array(scaled),
+            url=os.path.join(save_dir, "train", f"{v}_x_marked.zarr"),
         )
 
-        # transform test set
+        # --- Test ---
         z_arr_store_test = os.path.join(save_dir, "test", f"{v}_x.zarr")
         z_arr_test = da.from_zarr(z_arr_store_test)
-        orig_shape = z_arr_test.shape
+        orig_shape_test = z_arr_test.shape
+        z_arr_test_flat = z_arr_test.reshape(-1, 1).compute()
 
-        z_arr_test = z_arr_test.reshape(-1, 1).compute()
+        if graph:
+            graph_samples[(v, "test")] = z_arr_test_flat.ravel().copy()
 
         if v == "spo2":
-            z_arr_test = 100.0 - z_arr_test
-            scaled_values = scaler.transform(z_arr_test)
-        else:
-            scaled_values = scaler.transform(z_arr_test)
-
-        scaled_values = scaled_values.reshape(orig_shape)
-        scaled_values = da.from_array(scaled_values)
-
-        outlier_mask = np.abs(z_arr - col_mean) >= 3 * col_std
-        scaled_values[outlier_mask] = np.nan
-
-        # impute everything for test
-        scaled_values = da.map_blocks(
-            lambda block: np.apply_along_axis(impute, axis=1, arr=block),
-            scaled_values,
-            dtype=scaled_values.dtype,
-        )
-        assert not da.isnan(scaled_values).any().compute()
+            z_arr_test_flat = 100.0 - z_arr_test_flat
+        scaled_test = scaler.transform(z_arr_test_flat)
+        outlier_mask_test = np.abs(z_arr_test_flat - col_mean) >= 3 * col_std
+        scaled_test[outlier_mask_test] = np.nan
+        scaled_test = scaled_test.reshape(orig_shape_test)
         da.to_zarr(
-            scaled_values, url=os.path.join(save_dir, "test", f"{v}_x_scaled.zarr")
+            da.from_array(scaled_test),
+            url=os.path.join(save_dir, "test", f"{v}_x_marked.zarr"),
         )
 
-        # graph effect of norm
-        if graph:
-            sampled_data_pre = da.random.choice(
-                da.ravel(z_arr), size=n_samples, replace=False
+    # ------------------------------------------------------------------
+    # PHASE 2: Cross-variable window filtering
+    # ------------------------------------------------------------------
+    print("  Phase 2: filtering windows with too many outlier-NaNs...")
+    keep_masks = {}
+    for split in ["train", "test"]:
+        drop = None
+        n = None
+        per_var_drops = {}
+        for v in variables:
+            arr = da.from_zarr(
+                os.path.join(save_dir, split, f"{v}_x_marked.zarr")
             ).compute()
-            sampled_data_post = da.random.choice(
-                da.ravel(t_scaled_values), size=n_samples, replace=False
-            ).compute()
+            if drop is None:
+                n = arr.shape[0]
+                drop = np.zeros(n, dtype=bool)
+            nan_frac = np.isnan(arr).mean(axis=1)
+            var_drop = nan_frac > na_threshold
+            per_var_drops[v] = int(var_drop.sum())
+            drop |= var_drop
 
-            fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+        keep = ~drop
+        keep_masks[split] = keep
+        print(
+            f"    {split}: dropping {drop.sum()}/{n} windows "
+            f"({drop.mean():.1%})"
+        )
+        for v, cnt in per_var_drops.items():
+            if cnt > 0:
+                print(f"      {v}: {cnt} windows exceeded threshold")
 
-            # --- Left plot: Before normalization
-            sns.histplot(
-                sampled_data_pre,
-                ax=axes[0],
-                stat="probability",
-                edgecolor=(0, 0, 0, 0.5),
-                alpha=0.5,
+        # Update labels
+        labels_path = os.path.join(save_dir, split, "labels.pkl")
+        labels = pd.read_pickle(labels_path)
+        labels = labels[keep].reset_index(drop=True)
+        labels.to_pickle(labels_path)
+
+    # ------------------------------------------------------------------
+    # PHASE 3: Filter, impute, and save final scaled arrays
+    # ------------------------------------------------------------------
+    print("  Phase 3: filtering, imputing, and saving...")
+    for v in tqdm(variables, desc="impute+save"):
+        for split in ["train", "test"]:
+            marked_store = os.path.join(save_dir, split, f"{v}_x_marked.zarr")
+            arr = da.from_zarr(marked_store).compute()
+            arr = arr[keep_masks[split]]
+            arr = da.from_array(arr)
+
+            arr = da.map_blocks(
+                lambda block: np.apply_along_axis(impute, axis=1, arr=block),
+                arr,
+                dtype=arr.dtype,
             )
-            axes[0].set_title("Before Normalization")
-            axes[0].set_xlabel(f"{v}")
-
-            # --- Right plot: After normalization
-            sns.histplot(
-                sampled_data_post,
-                ax=axes[1],
-                stat="probability",
-                edgecolor=(0, 0, 0, 0.5),
-                alpha=0.5,
+            assert not da.isnan(arr).any().compute()
+            da.to_zarr(
+                arr, url=os.path.join(save_dir, split, f"{v}_x_scaled.zarr")
             )
-            axes[1].set_title("After Normalization")
-            axes[1].set_xlabel(f"{v}")
 
-            fig.suptitle(f"Effect of normalization on {v} (Train Set)")
+            # Graph after imputation
+            if graph:
+                raw = graph_samples.get((v, split))
+                if raw is not None:
+                    _graph_norm_effect(
+                        raw, arr.compute(), v,
+                        "Train Set" if split == "train" else "Test Set",
+                        img_dir,
+                    )
 
-            img_name = f"{v}_norm_effect_train.png"
-            plt.savefig(os.path.join(img_dir, img_name))
-            plt.close()
+            # Clean up intermediate
+            shutil.rmtree(marked_store)
 
-            sampled_data_pre = da.random.choice(
-                da.ravel(z_arr_test), size=n_samples, replace=False
-            ).compute()
-            sampled_data_post = da.random.choice(
-                da.ravel(scaled_values), size=n_samples, replace=False
-            ).compute()
-
-            fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-            # --- Left plot: Before normalization
-            sns.histplot(
-                sampled_data_pre,
-                ax=axes[0],
-                stat="probability",
-                edgecolor=(0, 0, 0, 0.5),
-                alpha=0.5,
-            )
-            axes[0].set_title("Before Normalization")
-            axes[0].set_xlabel(f"{v}")
-
-            # --- Right plot: After normalization
-            sns.histplot(
-                sampled_data_post,
-                ax=axes[1],
-                stat="probability",
-                edgecolor=(0, 0, 0, 0.5),
-                alpha=0.5,
-            )
-            axes[1].set_title("After Normalization")
-            axes[1].set_xlabel(f"{v}")
-
-            fig.suptitle(f"Effect of normalization on {v} (Test Set)")
-
-            img_name = f"{v}_norm_effect_test.png"
-            plt.savefig(os.path.join(img_dir, img_name))
-            plt.close()
-
-        # clean up
-        shutil.rmtree(z_arr_store)
-        shutil.rmtree(z_arr_store_test)
+        # Clean up original unscaled zarr files
+        for split in ["train", "test"]:
+            orig_store = os.path.join(save_dir, split, f"{v}_x.zarr")
+            if os.path.exists(orig_store):
+                shutil.rmtree(orig_store)
 
     return None
 

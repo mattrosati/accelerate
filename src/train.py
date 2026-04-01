@@ -57,6 +57,7 @@ from data_utils import build_continuous_time, load_label
 from constants import *
 from process_utils import *
 from tuner import RayAdaptiveRepeatedCVSearch
+from patient_utils import infer_base_ptid
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -169,11 +170,7 @@ if __name__ == "__main__":
         os.path.join(args.train_dir, "permanent", "train", "labels.pkl")
     )
     y_train = labels["in?"].astype(int)
-    if "base_ptid" in labels.columns:
-        groups = labels["base_ptid"].astype(str)
-    else:
-        # Older extracted datasets do not have an explicit base patient column.
-        groups = labels["ptid"].astype(str).str.split("_").str[0]
+    groups = infer_base_ptid(labels)
 
     ray.init(
         _temp_dir=args.log_dir, include_dashboard=False, logging_level=logging.ERROR

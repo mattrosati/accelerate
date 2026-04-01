@@ -18,20 +18,13 @@ from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import has_fit_parameter
 
+from patient_utils import make_patient_weights  # noqa: E402
+
 # Ray: disable deprecated env override behavior
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
 
 # Optuna experimental warnings
 warnings.filterwarnings("ignore", category=optuna.exceptions.ExperimentalWarning)
-
-
-def make_patient_weights(groups):
-    """Give each patient the same total weight across its windows."""
-    groups = np.asarray(groups)
-    unique_groups, counts = np.unique(groups, return_counts=True)
-    count_map = dict(zip(unique_groups, counts))
-    weights = np.array([1.0 / count_map[g] for g in groups], dtype=float)
-    return weights * (len(weights) / weights.sum())
 
 
 def subsample_by_patient(indices, groups, max_windows_per_patient, rng):
