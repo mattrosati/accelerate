@@ -23,9 +23,12 @@ class RecurrentPredictor(nn.Module):
         rnn_type,
         task="classification",
         pos_weight=None,
+        num_classes=1,
+        class_weights=None,
     ):
         super().__init__()
         self.task = task
+        self.num_classes = num_classes
         self.input_dropout = nn.Dropout(dropout)
         recurrent_dropout = dropout if num_layers > 1 else 0.0
         self.rnn = rnn_type(
@@ -38,11 +41,12 @@ class RecurrentPredictor(nn.Module):
         )
         output_dim = hidden_dim * (2 if bidirectional else 1)
         self.norm = nn.LayerNorm(output_dim)
+        head_out = num_classes if num_classes > 1 else 1
         self.head = nn.Sequential(
             nn.Linear(output_dim, output_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(output_dim, 1),
+            nn.Linear(output_dim, head_out),
         )
         if pos_weight is None:
             self.register_buffer("pos_weight", None)
@@ -50,6 +54,13 @@ class RecurrentPredictor(nn.Module):
             self.register_buffer(
                 "pos_weight",
                 torch.tensor([float(pos_weight)], dtype=torch.float32),
+            )
+        if class_weights is None:
+            self.register_buffer("class_weights", None)
+        else:
+            self.register_buffer(
+                "class_weights",
+                torch.tensor(class_weights, dtype=torch.float32),
             )
 
     def _forward_logits(self, x):
@@ -67,7 +78,9 @@ class RecurrentPredictor(nn.Module):
             final_hidden = hidden[-1]
 
         final_hidden = self.norm(final_hidden)
-        logits = self.head(final_hidden).squeeze(-1)
+        logits = self.head(final_hidden)
+        if self.num_classes <= 1:
+            logits = logits.squeeze(-1)
         return logits
 
     def forward(self, features=None, labels=None, x=None):
@@ -80,6 +93,13 @@ class RecurrentPredictor(nn.Module):
         logits = self._forward_logits(features)
         if labels is None:
             return logits
+
+        if self.num_classes > 1:
+            loss_fn = nn.CrossEntropyLoss(weight=self.class_weights)
+            return {
+                "loss": loss_fn(logits, labels.long()),
+                "logits": logits,
+            }
 
         labels = labels.to(logits.dtype)
         if self.task == "classification":
@@ -105,6 +125,8 @@ class LSTMClassifier(RecurrentPredictor):
         bidirectional=False,
         task="classification",
         pos_weight=None,
+        num_classes=1,
+        class_weights=None,
     ):
         super().__init__(
             input_dim=input_dim,
@@ -115,6 +137,8 @@ class LSTMClassifier(RecurrentPredictor):
             rnn_type=nn.LSTM,
             task=task,
             pos_weight=pos_weight,
+            num_classes=num_classes,
+            class_weights=class_weights,
         )
 
 
@@ -130,6 +154,8 @@ class GRUClassifier(RecurrentPredictor):
         bidirectional=False,
         task="classification",
         pos_weight=None,
+        num_classes=1,
+        class_weights=None,
     ):
         super().__init__(
             input_dim=input_dim,
@@ -140,6 +166,8 @@ class GRUClassifier(RecurrentPredictor):
             rnn_type=nn.GRU,
             task=task,
             pos_weight=pos_weight,
+            num_classes=num_classes,
+            class_weights=class_weights,
         )
 
 
@@ -165,6 +193,8 @@ class MomentPredictor(nn.Module):
         seq_len,
         task="classification",
         pos_weight=None,
+        num_classes=1,
+        class_weights=None,
         moment_size="large",
         freeze_backbone=True,
     ):
@@ -178,27 +208,23 @@ class MomentPredictor(nn.Module):
             )
 
         self.task = task
+        self.num_classes = num_classes
         self.seq_len = seq_len
         d_model = _MOMENT_D_MODEL[moment_size]
 
-        task_name = "classification" if task == "classification" else "embedding"
+        task_name = "classification" if (num_classes > 1 or task == "classification") else "embedding"
         model_kwargs = {
             "task_name": task_name,
             "n_channels": n_channels,
-            "freeze_encoder": freeze_backbone,  # Freeze the patch embedding layer
-            "freeze_embedder": freeze_backbone,  # Freeze the transformer encoder
-            "freeze_head": False,  # The linear forecasting head must be trained
-            ## NOTE: Disable gradient checkpointing to supress the warning when linear probing the model as MOMENT encoder is frozen
+            "freeze_encoder": freeze_backbone,
+            "freeze_embedder": freeze_backbone,
+            "freeze_head": False,
             "enable_gradient_checkpointing": not freeze_backbone,
-            # Choose how embedding is obtained from the model: One of ['mean', 'concat']
-            # Multi-channel embeddings are obtained by either averaging or concatenating patch embeddings
-            # along the channel dimension. 'concat' results in embeddings of size (n_channels * d_model),
-            # while 'mean' results in embeddings of size (d_model)
             "reduction": "mean",
         }
 
-        if task == "classification":
-            model_kwargs["num_class"] = 2
+        if task_name == "classification":
+            model_kwargs["num_class"] = num_classes if num_classes > 1 else 2
 
         self.moment = MOMENTPipeline.from_pretrained(
             f"AutonLab/MOMENT-1-{moment_size}",
@@ -207,7 +233,7 @@ class MomentPredictor(nn.Module):
         self.moment.init()
 
         self.regression_head = None
-        if task != "classification":
+        if task != "classification" and num_classes <= 1:
             self.regression_head = nn.Linear(d_model, 1)
 
         if pos_weight is None:
@@ -216,6 +242,13 @@ class MomentPredictor(nn.Module):
             self.register_buffer(
                 "pos_weight",
                 torch.tensor([float(pos_weight)], dtype=torch.float32),
+            )
+        if class_weights is None:
+            self.register_buffer("class_weights", None)
+        else:
+            self.register_buffer(
+                "class_weights",
+                torch.tensor(class_weights, dtype=torch.float32),
             )
 
     def _pad_to_moment(self, x):
@@ -248,7 +281,10 @@ class MomentPredictor(nn.Module):
         padded, mask = self._pad_to_moment(features)
         output = self.moment(x_enc=padded, input_mask=mask)
 
-        if self.task == "classification":
+        if self.num_classes > 1:
+            # MOMENT returns [batch, num_classes] logits directly
+            logits = output.logits
+        elif self.task == "classification":
             # MOMENT returns [batch, 2] logits; convert to scalar for BCE
             logits = output.logits[:, 1] - output.logits[:, 0]
         else:
@@ -257,6 +293,13 @@ class MomentPredictor(nn.Module):
 
         if labels is None:
             return logits
+
+        if self.num_classes > 1:
+            loss_fn = nn.CrossEntropyLoss(weight=self.class_weights)
+            return {
+                "loss": loss_fn(logits, labels.long()),
+                "logits": logits,
+            }
 
         labels = labels.to(logits.dtype)
         if self.task == "classification":

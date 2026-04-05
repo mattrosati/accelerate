@@ -1,8 +1,9 @@
 """
 Label & Data Integrity Audit Script.
 
-Runs 5 checks on a processed dataset directory to verify label correctness,
-class balance, and data-label alignment. See --help for usage.
+Runs 6 checks on a processed dataset directory to verify label correctness,
+class balance, data-label alignment, and multiclass ar_class consistency.
+See --help for usage.
 """
 
 import argparse
@@ -59,6 +60,31 @@ def check_class_balance(train_labels, test_labels, output_dir):
             "pct_nan": round(100 * n_nan / total, 2) if total > 0 else 0,
         }
 
+        # ar_class distribution (multiclass: 0=below, 1=in, 2=above)
+        if "ar_class" in labels.columns:
+            ar = labels["ar_class"].dropna()
+            ar_counts = {int(c): int((ar == c).sum()) for c in [0, 1, 2]}
+            ar_nan = int(labels["ar_class"].isna().sum())
+            results[name]["ar_class"] = {
+                "below": ar_counts.get(0, 0),
+                "in": ar_counts.get(1, 0),
+                "above": ar_counts.get(2, 0),
+                "nan": ar_nan,
+            }
+            if len(ar) > 0:
+                for c in [0, 1, 2]:
+                    results[name]["ar_class"][f"pct_{c}"] = round(
+                        100 * ar_counts.get(c, 0) / total, 2
+                    )
+
+            # ar_class <-> in? consistency
+            both_valid = labels.dropna(subset=["ar_class", "in?"])
+            if len(both_valid) > 0:
+                ar_in = both_valid["ar_class"] == 1
+                in_true = both_valid["in?"].astype(float) == 1.0
+                match = float((ar_in == in_true).mean())
+                results[name]["ar_class_in_consistency"] = round(match, 4)
+
         # frac_out distribution
         if "frac_out" in labels.columns:
             frac_out = labels["frac_out"].dropna()
@@ -107,6 +133,17 @@ def check_class_balance(train_labels, test_labels, output_dir):
             )
         if "frac_out_percentiles" in r:
             print(f"    frac_out percentiles: {r['frac_out_percentiles']}")
+        if "ar_class" in r:
+            ac = r["ar_class"]
+            print(f"    ar_class: below={ac['below']}, in={ac['in']}, above={ac['above']}, nan={ac['nan']}")
+            for c, label in [(0, "below"), (1, "in"), (2, "above")]:
+                pct = ac.get(f"pct_{c}", 0)
+                print(f"      {label}: {pct:.1f}%")
+        if "ar_class_in_consistency" in r:
+            cons = r["ar_class_in_consistency"]
+            print(f"    ar_class <-> in? consistency: {cons:.4f}")
+            if cons < 0.99:
+                print(f"    *** WARNING: {100*(1-cons):.1f}% of ar_class labels inconsistent with in?")
 
     # Plot class balance per patient
     if output_dir:
@@ -140,6 +177,24 @@ def check_class_balance(train_labels, test_labels, output_dir):
             plt.tight_layout()
             plt.savefig(os.path.join(output_dir, "class_balance.png"), dpi=150)
             plt.close()
+
+        # ar_class per-patient stacked bar
+        if "ar_class" in train_labels.columns:
+            valid_ar = train_labels.dropna(subset=["ar_class"])
+            if len(valid_ar) > 0:
+                patient_col = "base_ptid" if "base_ptid" in valid_ar.columns else "ptid"
+                ct = valid_ar.groupby(patient_col)["ar_class"].value_counts(normalize=True).unstack(fill_value=0)
+                ct = ct.reindex(columns=[0, 1, 2], fill_value=0)
+                ct = ct.sort_values(1)  # sort by fraction "in"
+                fig, ax = plt.subplots(figsize=(8, max(5, len(ct) * 0.2)))
+                ct.plot.barh(stacked=True, ax=ax, color=["#d62728", "#2ca02c", "#ff7f0e"])
+                ax.set_xlabel("Fraction")
+                ax.set_ylabel("Patient")
+                ax.set_title("Per-patient ar_class distribution (train)")
+                ax.legend(["below", "in", "above"], loc="lower right")
+                plt.tight_layout()
+                plt.savefig(os.path.join(output_dir, "ar_class_balance.png"), dpi=150)
+                plt.close()
 
     return results
 
@@ -222,6 +277,49 @@ def check_trivial_classifier(train_labels, test_labels):
                 print(f"  Error in MAPopt check: {e}")
     else:
         print("  MAPopt_Yale_affected_beta column not found — skipping Check 2b.")
+
+    # Check 2d: frac_out -> ar_class (multiclass trivial classifier)
+    if has_frac_out and "ar_class" in labels.columns:
+        valid_mc = labels.dropna(subset=["ar_class", "frac_out"])
+        if len(valid_mc) >= 10 and len(np.unique(valid_mc["ar_class"])) > 1:
+            X_mc = valid_mc[["frac_out"]].values
+            y_mc = valid_mc["ar_class"].astype(int).values
+            groups_mc = valid_mc[patient_col].values
+            try:
+                from sklearn.metrics import balanced_accuracy_score
+
+                gkf = GroupKFold(n_splits=min(5, len(np.unique(groups_mc))))
+                baccs = []
+                mc_aucs = []
+                for train_idx, val_idx in gkf.split(X_mc, y_mc, groups_mc):
+                    clf = LogisticRegression(max_iter=1000, multi_class="multinomial")
+                    clf.fit(X_mc[train_idx], y_mc[train_idx])
+                    y_pred = clf.predict(X_mc[val_idx])
+                    baccs.append(balanced_accuracy_score(y_mc[val_idx], y_pred))
+                    if len(np.unique(y_mc[val_idx])) > 1:
+                        proba = clf.predict_proba(X_mc[val_idx])
+                        try:
+                            mc_aucs.append(
+                                roc_auc_score(
+                                    y_mc[val_idx], proba,
+                                    multi_class="ovr", average="macro",
+                                )
+                            )
+                        except ValueError:
+                            pass
+                mean_bacc = float(np.mean(baccs)) if baccs else float("nan")
+                mean_mc_auc = float(np.mean(mc_aucs)) if mc_aucs else float("nan")
+                results["frac_out_to_ar_class_bacc"] = round(mean_bacc, 4)
+                results["frac_out_to_ar_class_auc"] = round(mean_mc_auc, 4)
+                print(f"\n  frac_out -> ar_class balanced accuracy: {mean_bacc:.4f}")
+                print(f"  frac_out -> ar_class macro AUC (OVR): {mean_mc_auc:.4f}")
+                print(
+                    "  (Moderate performance expected: frac_out alone can't distinguish below vs above)"
+                )
+            except Exception as e:
+                print(f"  Error in ar_class trivial classifier check: {e}")
+        else:
+            print("  Not enough valid multiclass samples for ar_class check.")
 
     # Check 2c: Consistency check — does in? == (frac_out <= threshold)?
     if has_frac_out:
@@ -473,6 +571,56 @@ def check_abp_label_direction(dataset_dir, sample_n):
     else:
         print("  Not enough valid pairs to compute correlation.")
 
+    # ar_class directional check: ABP mean should be lower for class 0, higher for class 2
+    if "ar_class" in labels.columns and abp_slice is not None:
+        ar_valid = valid.iloc[sample_idx[:len(window_means)]].copy()
+        ar_valid["abp_mean"] = window_means[:len(ar_valid)]
+        ar_valid = ar_valid.dropna(subset=["ar_class", "abp_mean"])
+
+        if len(ar_valid) > 0 and len(ar_valid["ar_class"].unique()) > 1:
+            print(f"\n  ABP mean by ar_class:")
+            class_means = {}
+            for c, label in [(0, "below"), (1, "in"), (2, "above")]:
+                subset = ar_valid[ar_valid["ar_class"] == c]["abp_mean"]
+                if len(subset) > 0:
+                    m = float(subset.mean())
+                    class_means[c] = m
+                    print(f"    {label} (n={len(subset)}): mean ABP = {m:.4f}")
+                else:
+                    print(f"    {label}: no samples")
+
+            # Check ordering: below < in < above (for normalized data, check relative ordering)
+            if 0 in class_means and 1 in class_means and 2 in class_means:
+                ordering_ok = class_means[0] < class_means[1] < class_means[2]
+                results["ar_class_abp_ordering_correct"] = ordering_ok
+                if ordering_ok:
+                    print("  OK: ABP mean ordering is below < in < above")
+                else:
+                    print(
+                        f"  *** NOTE: ABP ordering is {class_means[0]:.4f} / "
+                        f"{class_means[1]:.4f} / {class_means[2]:.4f}. "
+                        "Expected below < in < above. This may be normal if data is normalized."
+                    )
+
+            # Kruskal-Wallis test
+            try:
+                from scipy.stats import kruskal
+
+                groups_by_class = [
+                    ar_valid[ar_valid["ar_class"] == c]["abp_mean"].values
+                    for c in [0, 1, 2]
+                    if len(ar_valid[ar_valid["ar_class"] == c]) > 0
+                ]
+                if len(groups_by_class) >= 2:
+                    stat, pval = kruskal(*groups_by_class)
+                    results["ar_class_kruskal_stat"] = round(float(stat), 4)
+                    results["ar_class_kruskal_pval"] = float(pval)
+                    print(f"  Kruskal-Wallis: H={stat:.2f}, p={pval:.2e}")
+                    if pval > 0.05:
+                        print("  *** WARNING: ar_class groups are NOT significantly different in ABP mean")
+            except ImportError:
+                print("  scipy not available — skipping Kruskal-Wallis test")
+
     return results
 
 
@@ -614,6 +762,22 @@ def main():
             for k, v in c3[split].items():
                 if isinstance(v, dict) and not v.get("matches_labels", True):
                     issues.append(f"{split}/{k}: shape mismatch with labels")
+
+    # ar_class checks
+    c1 = all_results.get("check1_class_balance", {})
+    if "ar_class" not in c1.get("train", {}):
+        issues.append("ar_class column missing from train labels")
+    for split_name in ["train", "test"]:
+        cons = c1.get(split_name, {}).get("ar_class_in_consistency")
+        if cons is not None and cons < 0.99:
+            issues.append(
+                f"{split_name}: ar_class <-> in? consistency is {cons:.3f} (expected ~1.0)"
+            )
+    c4 = all_results.get("check4_abp_direction", {})
+    if c4.get("ar_class_abp_ordering_correct") is False:
+        issues.append("ABP mean ordering does not follow below < in < above")
+    if c4.get("ar_class_kruskal_pval", 0) > 0.05:
+        issues.append("ar_class groups not significantly different in ABP mean (Kruskal-Wallis)")
 
     if issues:
         print("\n  ISSUES FOUND:")

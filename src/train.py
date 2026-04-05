@@ -127,8 +127,23 @@ if __name__ == "__main__":
         default=50,
         help="Maximum windows per patient when using patient-balanced subsampling.",
     )
+    parser.add_argument(
+        "--task",
+        type=str,
+        choices=["binary", "multiclass"],
+        default="binary",
+        help="Classification task type.",
+    )
+    parser.add_argument(
+        "--target_col",
+        type=str,
+        default="",
+        help="Label column. Defaults to 'in?' for binary and 'ar_class' for multiclass.",
+    )
 
     args = parser.parse_args()
+    if not args.target_col:
+        args.target_col = "ar_class" if args.task == "multiclass" else "in?"
     np.random.seed(420)
     random.seed(420)
 
@@ -169,7 +184,7 @@ if __name__ == "__main__":
     labels = pd.read_pickle(
         os.path.join(args.train_dir, "permanent", "train", "labels.pkl")
     )
-    y_train = labels["in?"].astype(int)
+    y_train = labels[args.target_col].astype(int)
     groups = infer_base_ptid(labels)
 
     ray.init(
@@ -215,10 +230,18 @@ if __name__ == "__main__":
     os.makedirs(model_store, exist_ok=True)
 
     # init accuracies
-    metrics = {
-        "auc": "roc_auc",
-        "balanced_accuracy": "balanced_accuracy",
-    }
+    if args.task == "multiclass":
+        from sklearn.metrics import make_scorer, f1_score
+
+        metrics = {
+            "balanced_accuracy": "balanced_accuracy",
+            "f1_macro": make_scorer(f1_score, average="macro"),
+        }
+    else:
+        metrics = {
+            "auc": "roc_auc",
+            "balanced_accuracy": "balanced_accuracy",
+        }
 
     # init model
     n_iter = 30
@@ -246,7 +269,7 @@ if __name__ == "__main__":
         }
         n_iter = len(list(params.keys())) * 10
     elif args.model == "svm":
-        model = svm.SVC()
+        model = svm.SVC(probability=True) if args.task == "multiclass" else svm.SVC()
         params = {
             "C": tune.loguniform(1e-5, 100),
             "gamma": tune.loguniform(1e-5, 1e1),
@@ -269,7 +292,13 @@ if __name__ == "__main__":
         }
         n_iter = (len(list(params.keys())) - 1) * 10
     elif args.model == "xgb":
-        model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
+        if args.task == "multiclass":
+            model = xgb.XGBClassifier(
+                tree_method="hist", objective="multi:softprob",
+                eval_metric="mlogloss", num_class=3,
+            )
+        else:
+            model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")
         params = {
             "n_estimators": tune.lograndint(10, 400),
             "max_depth": tune.randint(2, 10),
@@ -353,11 +382,18 @@ if __name__ == "__main__":
     model_name = f"{args.model}{'+sv' if args.select_var else ''}_{args.data_mode}"
     print(f"Model name: {model_name}")
     print(f"Patient balancing mode: {args.patient_balance}")
-    rank_metric = (
-        "mean_val_patient_auc"
-        if args.patient_balance in ["weight", "subsample"]
-        else "mean_val_auc"
-    )
+    if args.task == "multiclass":
+        rank_metric = (
+            "mean_val_patient_balanced_accuracy"
+            if args.patient_balance in ["weight", "subsample"]
+            else "mean_val_balanced_accuracy"
+        )
+    else:
+        rank_metric = (
+            "mean_val_patient_auc"
+            if args.patient_balance in ["weight", "subsample"]
+            else "mean_val_auc"
+        )
     # When balancing is enabled, rank models by patient-balanced validation AUC
     # so hyperparameter search optimizes the same objective the weighting changes.
     search = RayAdaptiveRepeatedCVSearch(
@@ -371,6 +407,7 @@ if __name__ == "__main__":
         model_name=model_name,
         balance_mode=args.patient_balance,
         max_windows_per_patient=args.max_windows_per_patient,
+        task=args.task,
     )
     X_train = X_train.compute()
 

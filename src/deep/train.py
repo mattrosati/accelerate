@@ -72,7 +72,7 @@ def build_parser(add_help=True):
     parser.add_argument(
         "--task",
         type=str,
-        choices=["classification", "regression"],
+        choices=["classification", "regression", "multiclass"],
         default="classification",
     )
     parser.add_argument(
@@ -140,6 +140,8 @@ def build_parser(add_help=True):
             "val_patient_mae",
             "val_patient_rmse",
             "val_patient_r2",
+            "val_balanced_accuracy",
+            "val_patient_balanced_accuracy",
         ],
         default="val_patient_auc",
     )
@@ -204,6 +206,8 @@ def resolve_target_col(args):
     """Resolve the effective target column from the task and CLI args."""
     if args.target_col:
         return args.target_col
+    if args.task == "multiclass":
+        return "ar_class"
     return "in?" if args.task == "classification" else "MAPopt_Yale_affected_beta"
 
 
@@ -231,7 +235,7 @@ def load_data_bundle(train_dir, data_mode, target_col):
 # ---------------------------------------------------------------------------
 
 
-def _make_model(args, input_dim, pos_weight=None, seq_len=None):
+def _make_model(args, input_dim, pos_weight=None, seq_len=None, num_classes=1, class_weights=None):
     """Instantiate the requested predictor from CLI args."""
     if args.model == "moment":
         return MomentPredictor(
@@ -239,6 +243,8 @@ def _make_model(args, input_dim, pos_weight=None, seq_len=None):
             seq_len=seq_len,
             task=args.task,
             pos_weight=pos_weight,
+            num_classes=num_classes,
+            class_weights=class_weights,
             moment_size=args.moment_size,
             freeze_backbone=args.moment_freeze_backbone,
         )
@@ -250,6 +256,8 @@ def _make_model(args, input_dim, pos_weight=None, seq_len=None):
         "bidirectional": args.bidirectional,
         "task": args.task,
         "pos_weight": pos_weight,
+        "num_classes": num_classes,
+        "class_weights": class_weights,
     }
     if args.model == "lstm":
         return LSTMClassifier(**kwargs)
@@ -268,7 +276,10 @@ def _get_regression_target_stats(y_train):
 
 
 def _prepare_targets(args, y_tr, y_val, test_y):
-    """Prepare model-space targets and any task-specific training metadata."""
+    """Prepare model-space targets and any task-specific training metadata.
+
+    Returns (y_tr, y_val, test_y, target_stats, pos_weight, num_classes, class_weights).
+    """
     if args.task == "regression":
         target_stats = _get_regression_target_stats(y_tr)
         return (
@@ -277,7 +288,26 @@ def _prepare_targets(args, y_tr, y_val, test_y):
             (test_y - target_stats["mean"]) / target_stats["std"],
             target_stats,
             None,
+            1,
+            None,
         )
+
+    if args.task == "multiclass":
+        y_tr = y_tr.astype(int)
+        y_val = y_val.astype(int)
+        test_y = test_y.astype(int)
+        classes, counts = np.unique(y_tr, return_counts=True)
+        if len(classes) < 2:
+            raise ValueError(
+                "Training fold must contain at least 2 classes for multiclass."
+            )
+        # inverse frequency weights
+        total = counts.sum()
+        weights = total / (len(classes) * counts)
+        class_weights = np.zeros(int(classes.max()) + 1, dtype=np.float32)
+        for c, w in zip(classes, weights):
+            class_weights[int(c)] = w
+        return y_tr, y_val, test_y, None, None, len(class_weights), class_weights.tolist()
 
     pos_count = y_tr.sum()
     neg_count = len(y_tr) - pos_count
@@ -285,7 +315,7 @@ def _prepare_targets(args, y_tr, y_val, test_y):
         raise ValueError(
             "Training fold must contain both positive and negative examples."
         )
-    return y_tr, y_val, test_y, None, (neg_count / pos_count)
+    return y_tr, y_val, test_y, None, (neg_count / pos_count), 1, None
 
 
 def _make_splits(args, data_bundle):
@@ -331,21 +361,23 @@ def _make_splits(args, data_bundle):
 
 def _prepare_datasets(args, splits):
     """Build HF datasets and resolve task-specific target transforms."""
-    y_tr_model, y_val_model, test_y_model, target_stats, pos_weight = _prepare_targets(
+    y_tr_model, y_val_model, test_y_model, target_stats, pos_weight, num_classes, class_weights = _prepare_targets(
         args,
         splits["y_tr"],
         splits["y_val"],
         splits["test_y"],
     )
-    train_ds = build_hf_dataset(splits["X_tr"], y_tr_model)
-    val_ds = build_hf_dataset(splits["X_val"], y_val_model)
-    test_ds = build_hf_dataset(splits["test_X"], test_y_model)
+    train_ds = build_hf_dataset(splits["X_tr"], y_tr_model, task=args.task)
+    val_ds = build_hf_dataset(splits["X_val"], y_val_model, task=args.task)
+    test_ds = build_hf_dataset(splits["test_X"], test_y_model, task=args.task)
     return {
         "train_ds": train_ds,
         "val_ds": val_ds,
         "test_ds": test_ds,
         "target_stats": target_stats,
         "pos_weight": pos_weight,
+        "num_classes": num_classes,
+        "class_weights": class_weights,
     }
 
 
@@ -413,6 +445,8 @@ def _build_trainer(args, splits, datasets, model_store, run_name, wandb_run, no_
         input_dim=splits["input_dim"],
         pos_weight=datasets["pos_weight"],
         seq_len=splits["X_tr"].shape[1],
+        num_classes=datasets.get("num_classes", 1),
+        class_weights=datasets.get("class_weights"),
     )
     monitor_name = resolve_monitor(args.task, args.monitor, y_val=splits["y_val"])
 

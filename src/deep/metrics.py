@@ -34,6 +34,8 @@ VALID_MONITOR_NAMES = (
     "val_patient_mae",
     "val_patient_rmse",
     "val_patient_r2",
+    "val_balanced_accuracy",
+    "val_patient_balanced_accuracy",
 )
 
 _MINIMIZE_BARE = frozenset({"loss", "mae", "rmse", "patient_mae", "patient_rmse"})
@@ -75,9 +77,15 @@ def resolve_monitor(task, metric_name, y_val=None):
             stacklevel=2,
         )
         return "val_patient_rmse"
+    if task == "multiclass" and metric_name in {"val_auc", "val_patient_auc"}:
+        warnings.warn(
+            f"Switching monitor from {metric_name} to val_patient_balanced_accuracy for multiclass.",
+            stacklevel=2,
+        )
+        return "val_patient_balanced_accuracy"
     if (
         y_val is not None
-        and task == "classification"
+        and task in ("classification", "multiclass")
         and np.unique(y_val).shape[0] < 2
         and metric_name in {"val_auc", "val_patient_auc"}
     ):
@@ -110,8 +118,16 @@ class SplitMetricsConfig:
 
 
 def logits_to_predictions(logits):
-    """Convert logits to probabilities and hard predictions."""
+    """Convert logits to probabilities and hard predictions.
+
+    For binary (1-D logits): sigmoid → threshold 0.5.
+    For multiclass (2-D logits with C>1): softmax → argmax.
+    """
     logits = np.asarray(logits, dtype=np.float64)
+    if logits.ndim == 2 and logits.shape[1] > 1:
+        probs = torch.softmax(torch.from_numpy(logits), dim=-1).numpy()
+        preds = probs.argmax(axis=1)
+        return probs, preds
     probs = torch.sigmoid(torch.from_numpy(logits)).numpy()
     preds = (probs >= 0.5).astype(int)
     return probs, preds
@@ -162,6 +178,56 @@ def compute_metrics(loss, y_true, y_prob, y_pred, groups, patient_balance=True):
             metrics["patient_auc"] = roc_auc_score(
                 y_true, y_prob, sample_weight=patient_weights
             )
+
+    return metrics
+
+
+def compute_multiclass_metrics(loss, y_true, y_prob, y_pred, groups, patient_balance=True):
+    """Compute window-level and patient-balanced multiclass classification metrics.
+
+    ``y_prob`` is a ``(N, C)`` probability matrix from softmax.
+    """
+    if y_true.size == 0:
+        metrics = {
+            "loss": float(loss),
+            "auc": np.nan,
+            "balanced_accuracy": np.nan,
+        }
+        if patient_balance:
+            metrics["patient_balanced_accuracy"] = np.nan
+            metrics["patient_auc"] = np.nan
+        return metrics
+
+    metrics = {
+        "loss": float(loss),
+        "auc": np.nan,
+        "balanced_accuracy": balanced_accuracy_score(y_true, y_pred),
+    }
+    n_classes = len(np.unique(y_true))
+    if n_classes > 1 and y_prob.ndim == 2 and y_prob.shape[1] > 1:
+        try:
+            metrics["auc"] = roc_auc_score(
+                y_true, y_prob, multi_class="ovr", average="macro"
+            )
+        except ValueError:
+            metrics["auc"] = np.nan
+
+    if patient_balance:
+        patient_weights = make_patient_weights(groups)
+        metrics["patient_balanced_accuracy"] = np.nan
+        if patient_weights.size > 0:
+            metrics["patient_balanced_accuracy"] = balanced_accuracy_score(
+                y_true, y_pred, sample_weight=patient_weights
+            )
+        metrics["patient_auc"] = np.nan
+        if patient_weights.size > 0 and n_classes > 1 and y_prob.ndim == 2:
+            try:
+                metrics["patient_auc"] = roc_auc_score(
+                    y_true, y_prob, multi_class="ovr", average="macro",
+                    sample_weight=patient_weights,
+                )
+            except ValueError:
+                metrics["patient_auc"] = np.nan
 
     return metrics
 
@@ -243,7 +309,7 @@ class GroupAwareMetricsComputer:
         if labels.ndim > 1 and labels.shape[-1] == 1:
             labels = labels.squeeze(-1)
 
-        if self.task == "classification":
+        if self.task in ("classification", "multiclass"):
             y_true = labels.astype(int)
             y_prob, y_pred = logits_to_predictions(predictions)
             self.last_outputs = {
@@ -251,9 +317,14 @@ class GroupAwareMetricsComputer:
                 "y_pred": y_pred,
                 "y_prob": y_prob,
             }
-            metrics = compute_metrics(
-                np.nan, y_true, y_prob, y_pred, self.groups, self.patient_balance
-            )
+            if self.task == "multiclass":
+                metrics = compute_multiclass_metrics(
+                    np.nan, y_true, y_prob, y_pred, self.groups, self.patient_balance
+                )
+            else:
+                metrics = compute_metrics(
+                    np.nan, y_true, y_prob, y_pred, self.groups, self.patient_balance
+                )
         else:
             y_true = labels.astype(np.float64)
             y_pred = predictions.astype(np.float64)

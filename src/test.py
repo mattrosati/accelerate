@@ -29,6 +29,9 @@ from process_utils import (
     robust_ceil,
 )
 from deep.data import reshape_flat_windows, make_grouped_split
+import dask.array as da
+from data_extract import _bad_frac
+from constants import ABP_PHYSIO_LO, ABP_PHYSIO_HI, ABP_MAX_BAD_FRAC
 
 
 # ---------------------------------------------------------------------------
@@ -722,3 +725,262 @@ class TestPipelineInvariants:
         # Normal cases
         assert robust_floor(2.5) == 2.0
         assert robust_ceil(2.5) == 3.0
+
+
+# ===========================================================================
+# Group 11: _bad_frac (physiological value filtering during downsampling)
+# ===========================================================================
+
+
+class TestBadFrac:
+    """Tests for _bad_frac() in data_extract.py — NaN and physiological range check."""
+
+    @staticmethod
+    def _make_3d(values):
+        """Wrap a list of group values into a (1, 1, G) dask array."""
+        arr = np.array([[values]], dtype=float)
+        return da.from_array(arr)
+
+    def test_all_valid_non_abp(self):
+        reshaped = self._make_3d([70.0, 80.0, 90.0, 60.0])
+        result = _bad_frac(reshaped, is_abp=False).compute()
+        assert result[0, 0] == pytest.approx(0.0)
+
+    def test_all_nan_non_abp(self):
+        reshaped = self._make_3d([np.nan, np.nan, np.nan, np.nan])
+        result = _bad_frac(reshaped, is_abp=False).compute()
+        assert result[0, 0] == pytest.approx(1.0)
+
+    def test_partial_nan_non_abp(self):
+        reshaped = self._make_3d([np.nan, 70.0, 80.0, 90.0])
+        result = _bad_frac(reshaped, is_abp=False).compute()
+        assert result[0, 0] == pytest.approx(0.25)
+
+    def test_abp_out_of_range_counted(self):
+        # 10 < 20 (below) and 250 > 200 (above) -> 2/4 bad
+        reshaped = self._make_3d([10.0, 70.0, 250.0, 80.0])
+        result = _bad_frac(reshaped, is_abp=True).compute()
+        assert result[0, 0] == pytest.approx(0.5)
+
+    def test_abp_nan_and_out_of_range(self):
+        # NaN + 10.0 (below range) -> 2/4 bad
+        reshaped = self._make_3d([np.nan, 10.0, 70.0, 80.0])
+        result = _bad_frac(reshaped, is_abp=True).compute()
+        assert result[0, 0] == pytest.approx(0.5)
+
+    def test_abp_all_physiological(self):
+        reshaped = self._make_3d([80.0, 80.0, 80.0, 80.0])
+        result = _bad_frac(reshaped, is_abp=True).compute()
+        assert result[0, 0] == pytest.approx(0.0)
+
+    def test_non_abp_ignores_range(self):
+        # Out-of-ABP-range values are NOT flagged for non-ABP variables
+        reshaped = self._make_3d([10.0, 250.0, 70.0, 80.0])
+        result = _bad_frac(reshaped, is_abp=False).compute()
+        assert result[0, 0] == pytest.approx(0.0)
+
+    def test_threshold_boundary(self):
+        # Exactly 25% bad -> 0.25 is NOT > 0.25 (strict >)
+        reshaped = self._make_3d([np.nan, 70.0, 80.0, 90.0])
+        frac = _bad_frac(reshaped, is_abp=False).compute()[0, 0]
+        assert frac == pytest.approx(0.25)
+        assert not (frac > ABP_MAX_BAD_FRAC)
+
+    def test_abp_boundary_values_are_valid(self):
+        # Exactly 20.0 and 200.0 should be considered physiological (>= and <=)
+        reshaped = self._make_3d([20.0, 200.0, 100.0, 100.0])
+        result = _bad_frac(reshaped, is_abp=True).compute()
+        assert result[0, 0] == pytest.approx(0.0)
+
+    def test_multiple_groups(self):
+        # (1, 3, 4) -> 3 groups of 4 values each
+        arr = np.array([[[70.0, 80.0, 90.0, 60.0],
+                         [np.nan, np.nan, np.nan, np.nan],
+                         [np.nan, 70.0, 80.0, 90.0]]], dtype=float)
+        reshaped = da.from_array(arr)
+        result = _bad_frac(reshaped, is_abp=False).compute()
+        np.testing.assert_allclose(result[0], [0.0, 1.0, 0.25])
+
+
+# ===========================================================================
+# Group 12: ar_class from extract_proportions_count
+# ===========================================================================
+
+
+class TestArClassCount:
+    """ar_class labels from extract_proportions_count."""
+
+    def test_ar_class_in(self):
+        w = _make_window(np.full(100, 70.0))
+        labels = _make_labels_df()
+        result = extract_proportions_count([w], labels)
+        assert result["ar_class"][0] == 1
+
+    def test_ar_class_below(self):
+        w = _make_window(np.full(100, 50.0))
+        labels = _make_labels_df()
+        result = extract_proportions_count([w], labels)
+        assert result["ar_class"][0] == 0
+
+    def test_ar_class_above(self):
+        w = _make_window(np.full(100, 90.0))
+        labels = _make_labels_df()
+        result = extract_proportions_count([w], labels)
+        assert result["ar_class"][0] == 2
+
+    def test_ar_class_nan_limits(self):
+        w = _make_window(np.full(100, 70.0))
+        labels = _make_labels_df(LLA_Yale_affected_beta=np.nan)
+        result = extract_proportions_count([w], labels)
+        assert np.isnan(result["ar_class"][0])
+
+    def test_ar_class_ambiguous_nan(self):
+        # Same ambiguous case: 52 inside, 48 outside, 10% gap overlap
+        vals = np.concatenate([np.full(52, 70.0), np.full(48, 50.0)])
+        w = _make_window(vals, overlap_len=10, total_length=100)
+        labels = _make_labels_df()
+        result = extract_proportions_count([w], labels)
+        assert np.isnan(result["ar_class"][0])
+
+    def test_ar_class_consistent_with_in(self):
+        """ar_class == 1 iff in? == 1.0 for all non-NaN results."""
+        windows = [
+            _make_window(np.full(100, 70.0)),  # inside
+            _make_window(np.full(100, 50.0)),  # below
+            _make_window(np.full(100, 90.0)),  # above
+        ]
+        labels = pd.DataFrame({
+            "LLA_Yale_affected_beta": [60.0] * 3,
+            "ULA_Yale_affected_beta": [80.0] * 3,
+            "MAPopt_Yale_affected_beta": [70.0] * 3,
+        })
+        result = extract_proportions_count(windows, labels)
+        for i in range(3):
+            if not np.isnan(result["in?"][i]) and not np.isnan(result["ar_class"][i]):
+                assert (result["ar_class"][i] == 1) == (result["in?"][i] == 1.0)
+
+
+# ===========================================================================
+# Group 13: ar_class from extract_proportions_mean
+# ===========================================================================
+
+
+class TestArClassMean:
+    """ar_class labels from extract_proportions_mean."""
+
+    def test_ar_class_in(self):
+        w = _make_window(np.full(100, 70.0))
+        labels = _make_labels_df()
+        result = extract_proportions_mean([w], labels)
+        assert result["ar_class"][0] == 1
+
+    def test_ar_class_below(self):
+        w = _make_window(np.full(100, 50.0))
+        labels = _make_labels_df()
+        result = extract_proportions_mean([w], labels)
+        assert result["ar_class"][0] == 0
+
+    def test_ar_class_above(self):
+        w = _make_window(np.full(100, 90.0))
+        labels = _make_labels_df()
+        result = extract_proportions_mean([w], labels)
+        assert result["ar_class"][0] == 2
+
+    def test_ar_class_nan_window(self):
+        w = _make_window(np.full(100, np.nan))
+        labels = _make_labels_df()
+        result = extract_proportions_mean([w], labels)
+        assert np.isnan(result["ar_class"][0])
+
+    def test_ar_class_consistent_with_in(self):
+        windows = [
+            _make_window(np.full(100, 70.0)),
+            _make_window(np.full(100, 50.0)),
+            _make_window(np.full(100, 90.0)),
+        ]
+        labels = pd.DataFrame({
+            "LLA_Yale_affected_beta": [60.0] * 3,
+            "ULA_Yale_affected_beta": [80.0] * 3,
+            "MAPopt_Yale_affected_beta": [70.0] * 3,
+        })
+        result = extract_proportions_mean(windows, labels)
+        for i in range(3):
+            if not np.isnan(result["in?"][i]) and not np.isnan(result["ar_class"][i]):
+                assert (result["ar_class"][i] == 1) == (result["in?"][i] == 1.0)
+
+
+# ===========================================================================
+# Group 14: ar_class from extract_proportions_smooth
+# ===========================================================================
+
+
+class TestArClassSmooth:
+    """ar_class labels from extract_proportions_smooth."""
+
+    @staticmethod
+    def _make_smooth_labels(n_minutes, lla=60.0, ula=80.0, mapopt=70.0, r2=0.5):
+        labels = pd.DataFrame({
+            "LLA_Yale_affected_beta": [lla] * n_minutes,
+            "ULA_Yale_affected_beta": [ula] * n_minutes,
+            "MAPopt_Yale_affected_beta": [mapopt] * n_minutes,
+            "Yale_R2full_affected": [r2] * n_minutes,
+            "start_idx": [0] * n_minutes,
+            "end_idx": [n_minutes - 1] * n_minutes,
+        })
+        return labels
+
+    def test_ar_class_in(self):
+        n_minutes = 5
+        w = _make_window(np.full(n_minutes * 60, 70.0))
+        labels = self._make_smooth_labels(n_minutes)
+        config = SimpleNamespace(smooth_frac=0.46, r2_threshold=0.0, percentage=0.0)
+        result = extract_proportions_smooth([w], labels, 0.0, [0], config)
+        assert result["ar_class"][0] == 1
+
+    def test_ar_class_below(self):
+        n_minutes = 5
+        w = _make_window(np.full(n_minutes * 60, 50.0))
+        labels = self._make_smooth_labels(n_minutes)
+        config = SimpleNamespace(smooth_frac=0.46, r2_threshold=0.0, percentage=0.0)
+        result = extract_proportions_smooth([w], labels, 0.0, [0], config)
+        assert result["ar_class"][0] == 0
+
+    def test_ar_class_above(self):
+        n_minutes = 5
+        w = _make_window(np.full(n_minutes * 60, 90.0))
+        labels = self._make_smooth_labels(n_minutes)
+        config = SimpleNamespace(smooth_frac=0.46, r2_threshold=0.0, percentage=0.0)
+        result = extract_proportions_smooth([w], labels, 0.0, [0], config)
+        assert result["ar_class"][0] == 2
+
+    def test_ar_class_r2_filter(self):
+        n_minutes = 5
+        w = _make_window(np.full(n_minutes * 60, 70.0))
+        labels = self._make_smooth_labels(n_minutes, r2=0.1)
+        config = SimpleNamespace(smooth_frac=0.46, r2_threshold=0.5, percentage=0.0)
+        result = extract_proportions_smooth([w], labels, 0.0, [0], config)
+        assert np.isnan(result["ar_class"][0])
+
+    def test_ar_class_consistent_with_in(self):
+        n_minutes = 5
+        samples = n_minutes * 60
+        windows = [
+            _make_window(np.full(samples, 70.0)),
+            _make_window(np.full(samples, 50.0)),
+            _make_window(np.full(samples, 90.0)),
+        ]
+        labels = pd.DataFrame({
+            "LLA_Yale_affected_beta": [60.0] * n_minutes,
+            "ULA_Yale_affected_beta": [80.0] * n_minutes,
+            "MAPopt_Yale_affected_beta": [70.0] * n_minutes,
+            "Yale_R2full_affected": [0.5] * n_minutes,
+            "start_idx": [0] * n_minutes,
+            "end_idx": [n_minutes - 1] * n_minutes,
+        })
+        config = SimpleNamespace(smooth_frac=0.46, r2_threshold=0.0, percentage=0.0)
+        for w in windows:
+            result = extract_proportions_smooth([w], labels, 0.0, [0], config)
+            in_val = result["in?"][0]
+            ar_val = result["ar_class"][0]
+            if not np.isnan(in_val) and not np.isnan(ar_val):
+                assert (ar_val == 1) == (in_val == 1.0)

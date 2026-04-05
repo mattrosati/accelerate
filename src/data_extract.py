@@ -417,6 +417,14 @@ def finalize(variables, split_dict, save_dir):
     return None
 
 
+def _bad_frac(reshaped, is_abp=False):
+    """Fraction of values per group that are NaN (or outside [20, 200] for ABP)."""
+    bad = da.isnan(reshaped)
+    if is_abp:
+        bad = bad | (reshaped < ABP_PHYSIO_LO) | (reshaped > ABP_PHYSIO_HI)
+    return bad.sum(axis=-1) / reshaped.shape[-1]
+
+
 def downsample(variables, save_dir, strategy="mean", frequency=60):
     print("Downsampling:")
     for s in ["train", "test"]:
@@ -438,36 +446,34 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
 
             if z_arr.shape[1] != min_points:
                 time_grid_mult = z_arr.shape[1] // min_points
+                reshaped = da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult))
+
                 if strategy == "mean":
-                    downsampled = da.nanmean(
-                        da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)),
-                        axis=-1,
-                    )
+                    downsampled = da.nanmean(reshaped, axis=-1)
                 elif strategy == "median":
-                    downsampled = da.nanmedian(
-                        da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult)),
-                        axis=-1,
-                    )
+                    downsampled = da.nanmedian(reshaped, axis=-1)
+
+                mask = _bad_frac(reshaped, is_abp=(v == "abp")) > ABP_MAX_BAD_FRAC
+                downsampled = da.where(mask, np.nan, downsampled)
+
                 print(f"Downsampled to {downsampled.shape}")
             else:
                 downsampled = z_arr
 
-            # if s == "test":
-            #     print("Checking test dataset for problems:")
-            #     do_tests(downsampled)
-
             # downsample even further if desired
             if frequency < 60:
                 points_per_freq = 60 // frequency
-                # Reshape to (N, timesteps, points_per_freq)
-                downsampled = da.reshape(
+                reshaped2 = da.reshape(
                     downsampled, shape=(downsampled.shape[0], -1, points_per_freq)
                 )
 
                 if strategy == "mean":
-                    downsampled = da.nanmean(downsampled, axis=-1)
+                    downsampled = da.nanmean(reshaped2, axis=-1)
                 elif strategy == "median":
-                    downsampled = da.nanmedian(downsampled, axis=-1)
+                    downsampled = da.nanmedian(reshaped2, axis=-1)
+
+                mask2 = _bad_frac(reshaped2, is_abp=(v == "abp")) > ABP_MAX_BAD_FRAC
+                downsampled = da.where(mask2, np.nan, downsampled)
 
                 print(f"Further downsampled to {downsampled.shape}")
             da.to_zarr(downsampled, url=os.path.join(save_dir, s, f"{v}_x_ds.zarr"))

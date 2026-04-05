@@ -14,15 +14,55 @@ import dask.array as da
 from ray import tune
 from tuner import train_cv, predict_scores as _predict_scores
 
-from sklearn.metrics import balanced_accuracy_score, roc_auc_score
+from sklearn.metrics import balanced_accuracy_score, roc_auc_score, f1_score
 
 from patient_utils import make_patient_weights, infer_base_ptid
 
 
-def predict_scores(estimator, X):
+def predict_scores(estimator, X, multiclass=False):
     """Return (y_prob, y_pred) for backward-compat with eval call sites."""
+    if multiclass:
+        proba, preds = _predict_scores(estimator, X, multiclass=True)
+        return proba, preds
     scores, threshold = _predict_scores(estimator, X)
     return scores, (scores >= threshold).astype(int)
+
+
+def compute_test_metrics(y, y_prob, y_pred, patient_weights, is_mc):
+    """Compute window-level and patient-balanced test metrics."""
+    r = {"test_balanced_accuracy": balanced_accuracy_score(y, y_pred)}
+    if is_mc:
+        r["test_f1_macro"] = f1_score(y, y_pred, average="macro")
+        if y_prob is not None and len(np.unique(y)) > 1:
+            try:
+                r["test_auc"] = roc_auc_score(
+                    y, y_prob, multi_class="ovr", average="macro"
+                )
+            except ValueError:
+                r["test_auc"] = np.nan
+        else:
+            r["test_auc"] = np.nan
+    else:
+        r["test_auc"] = roc_auc_score(y, y_prob)
+    r["test_patient_balanced_accuracy"] = balanced_accuracy_score(
+        y, y_pred, sample_weight=patient_weights
+    )
+    if is_mc:
+        if y_prob is not None and len(np.unique(y)) > 1:
+            try:
+                r["test_patient_auc"] = roc_auc_score(
+                    y, y_prob, multi_class="ovr", average="macro",
+                    sample_weight=patient_weights,
+                )
+            except ValueError:
+                r["test_patient_auc"] = np.nan
+        else:
+            r["test_patient_auc"] = np.nan
+    else:
+        r["test_patient_auc"] = roc_auc_score(
+            y, y_prob, sample_weight=patient_weights
+        )
+    return r
 
 
 if __name__ == "__main__":
@@ -51,8 +91,23 @@ if __name__ == "__main__":
         type=str,
         help="Name of training run to evaluate.",
     )
+    parser.add_argument(
+        "--task",
+        type=str,
+        choices=["binary", "multiclass"],
+        default="binary",
+        help="Classification task type.",
+    )
+    parser.add_argument(
+        "--target_col",
+        type=str,
+        default="",
+        help="Label column. Defaults to 'in?' for binary and 'ar_class' for multiclass.",
+    )
 
     args = parser.parse_args()
+    if not args.target_col:
+        args.target_col = "ar_class" if args.task == "multiclass" else "in?"
     np.random.seed(420)
 
     print(f"Testing all models with {args.subset} embeddings.")
@@ -84,7 +139,7 @@ if __name__ == "__main__":
         labels = pd.read_pickle(
             os.path.join(args.train_dir, "permanent", "test", "labels.pkl")
         )
-        y = labels["in?"].astype(int)
+        y = labels[args.target_col].astype(int)
         groups = infer_base_ptid(labels)
         patient_weights = make_patient_weights(groups)
 
@@ -123,16 +178,9 @@ if __name__ == "__main__":
 
                 # calculate testing metrics
                 estimator = model
-                y_prob, y_pred = predict_scores(estimator, X)
-
-                r["test_balanced_accuracy"] = balanced_accuracy_score(y, y_pred)
-                r["test_auc"] = roc_auc_score(y, y_prob)
-                r["test_patient_balanced_accuracy"] = balanced_accuracy_score(
-                    y, y_pred, sample_weight=patient_weights
-                )
-                r["test_patient_auc"] = roc_auc_score(
-                    y, y_prob, sample_weight=patient_weights
-                )
+                is_mc = args.task == "multiclass"
+                y_prob, y_pred = predict_scores(estimator, X, multiclass=is_mc)
+                r |= compute_test_metrics(y, y_prob, y_pred, patient_weights, is_mc)
 
                 r["mode"] = mode
                 r["model"] = model_name
@@ -171,16 +219,8 @@ if __name__ == "__main__":
 
                 # calculate testing metrics
                 estimator = search.best_estimator_
-                y_prob, y_pred = predict_scores(estimator, X)
-
-                r["test_balanced_accuracy"] = balanced_accuracy_score(y, y_pred)
-                r["test_auc"] = roc_auc_score(y, y_prob)
-                r["test_patient_balanced_accuracy"] = balanced_accuracy_score(
-                    y, y_pred, sample_weight=patient_weights
-                )
-                r["test_patient_auc"] = roc_auc_score(
-                    y, y_prob, sample_weight=patient_weights
-                )
+                y_prob, y_pred = predict_scores(estimator, X, multiclass=is_mc)
+                r |= compute_test_metrics(y, y_prob, y_pred, patient_weights, is_mc)
 
                 r["mode"] = mode
                 r["model"] = model_name

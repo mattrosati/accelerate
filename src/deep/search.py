@@ -58,6 +58,8 @@ def build_search_parser():
             "val_patient_mae",
             "val_patient_rmse",
             "val_patient_r2",
+            "val_balanced_accuracy",
+            "val_patient_balanced_accuracy",
         ],
         default="val_patient_auc",
     )

@@ -60,8 +60,20 @@ def get_fit_kwargs(model, sample_weight):
     return {}
 
 
-def predict_scores(model, X):
-    """Return continuous scores and the matching hard-decision threshold."""
+def predict_scores(model, X, multiclass=False):
+    """Return continuous scores and the matching hard-decision threshold.
+
+    For multiclass, returns the full probability matrix and hard predictions
+    as (proba_matrix, predictions) with threshold=None.
+    """
+    if multiclass:
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(X)
+        else:
+            proba = None
+        preds = model.predict(X)
+        return proba, preds
+
     if hasattr(model, "predict_proba"):
         scores = model.predict_proba(X)
         if scores.ndim == 2:
@@ -77,9 +89,29 @@ def predict_scores(model, X):
     return scores, threshold
 
 
-def compute_patient_balanced_metrics(model, X, y, groups):
+def compute_patient_balanced_metrics(model, X, y, groups, task="binary"):
     """Compute validation metrics under equal patient contribution."""
     weights = make_patient_weights(groups)
+
+    if task == "multiclass":
+        proba, y_pred = predict_scores(model, X, multiclass=True)
+        metrics = {
+            "patient_balanced_accuracy": balanced_accuracy_score(
+                y, y_pred, sample_weight=weights
+            ),
+        }
+        if proba is not None and np.unique(y).shape[0] > 1:
+            try:
+                metrics["patient_auc"] = roc_auc_score(
+                    y, proba, multi_class="ovr", average="macro",
+                    sample_weight=weights,
+                )
+            except ValueError:
+                metrics["patient_auc"] = np.nan
+        else:
+            metrics["patient_auc"] = np.nan
+        return metrics
+
     scores, threshold = predict_scores(model, X)
     y_pred = (scores >= threshold).astype(int)
 
@@ -106,6 +138,7 @@ def train_cv(
     scoring,
     balance_mode,
     max_windows_per_patient,
+    task="binary",
 ):
     """Train one hyperparameter trial across all prepared CV folds."""
 
@@ -141,8 +174,8 @@ def train_cv(
 
         scores_train = scoring(model, X_tr, y_tr)
         scores_val = scoring(model, X_val, y_val)
-        patient_train = compute_patient_balanced_metrics(model, X_tr, y_tr, groups_tr)
-        patient_val = compute_patient_balanced_metrics(model, X_val, y_val, groups_val)
+        patient_train = compute_patient_balanced_metrics(model, X_tr, y_tr, groups_tr, task=task)
+        patient_val = compute_patient_balanced_metrics(model, X_val, y_val, groups_val, task=task)
         scores_train = scores_train | patient_train
         scores_val = scores_val | patient_val
 
@@ -196,6 +229,7 @@ class RayAdaptiveRepeatedCVSearch:
         model_name="base",
         balance_mode="none",
         max_windows_per_patient=50,
+        task="binary",
     ):
         """
         estimator: sklearn estimator class (e.g. RandomForestClassifier)
@@ -216,6 +250,7 @@ class RayAdaptiveRepeatedCVSearch:
         self.scoring = check_scoring(estimator, scoring=scoring)
         self.mode = mode
         self.rank_metric = rank_metric
+        self.task = task
 
         self.folds = None
         self.best_config = None
@@ -288,6 +323,7 @@ class RayAdaptiveRepeatedCVSearch:
             scoring=self.scoring,
             balance_mode=self.balance_mode,
             max_windows_per_patient=self.max_windows_per_patient,
+            task=self.task,
         )
         tuner = tune.Tuner(
             trainable,

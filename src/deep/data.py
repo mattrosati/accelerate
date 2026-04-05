@@ -113,10 +113,15 @@ def load_split_arrays(train_dir, split, data_mode="raw", target_col="in?"):
     return X, y, groups, labels, channels
 
 
-def build_hf_dataset(X, y):
+def build_hf_dataset(X, y, task="classification"):
     """Build a Hugging Face Dataset for one split of recurrent windows."""
     X = np.asarray(X, dtype=np.float32)
-    y = np.asarray(y, dtype=np.float32)
+    if task == "multiclass":
+        y = np.asarray(y, dtype=np.int64)
+        label_feature = Value("int64")
+    else:
+        y = np.asarray(y, dtype=np.float32)
+        label_feature = Value("float32")
 
     features = Features(
         {
@@ -124,7 +129,7 @@ def build_hf_dataset(X, y):
                 shape=(int(X.shape[1]), int(X.shape[2])),
                 dtype="float32",
             ),
-            "labels": Value("float32"),
+            "labels": label_feature,
         }
     )
     dataset = HFDataset.from_dict(
