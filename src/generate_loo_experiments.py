@@ -12,7 +12,6 @@ import os
 import sys
 from argparse import ArgumentParser
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from loo import model_path_iter  # noqa: E402
 
 
@@ -26,18 +25,20 @@ def main():
         default="/home/mr2238/scratch_pi_np442/mr2238/accelerate",
     )
     parser.add_argument(
-        "--patient_balance", type=str, default="weight",
+        "--patient_balance",
+        type=str,
+        default="weight",
     )
     parser.add_argument(
-        "--output", type=str, default="scripts/loo_experiments.txt",
+        "--output",
+        type=str,
+        default="/home/mr2238/accelerate/scripts/loo_experiments.txt",
     )
     args = parser.parse_args()
 
     train_dir = os.path.join(args.base_dir, args.data_mode)
     dataset_names = sorted(
-        d
-        for d in os.listdir(train_dir)
-        if os.path.isdir(os.path.join(train_dir, d)) and "chop" in d
+        d for d in os.listdir(train_dir) if os.path.isdir(os.path.join(train_dir, d))
     )
 
     lines = []

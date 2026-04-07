@@ -18,7 +18,7 @@ from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import has_fit_parameter
 
-from src.patient_utils import make_patient_weights  # noqa: E402
+from patient_utils import make_patient_weights  # noqa: E402
 
 # Ray: disable deprecated env override behavior
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
@@ -103,7 +103,10 @@ def compute_patient_balanced_metrics(model, X, y, groups, task="binary"):
         if proba is not None and np.unique(y).shape[0] > 1:
             try:
                 metrics["patient_auc"] = roc_auc_score(
-                    y, proba, multi_class="ovr", average="macro",
+                    y,
+                    proba,
+                    multi_class="ovr",
+                    average="macro",
                     sample_weight=weights,
                 )
             except ValueError:
@@ -174,8 +177,12 @@ def train_cv(
 
         scores_train = scoring(model, X_tr, y_tr)
         scores_val = scoring(model, X_val, y_val)
-        patient_train = compute_patient_balanced_metrics(model, X_tr, y_tr, groups_tr, task=task)
-        patient_val = compute_patient_balanced_metrics(model, X_val, y_val, groups_val, task=task)
+        patient_train = compute_patient_balanced_metrics(
+            model, X_tr, y_tr, groups_tr, task=task
+        )
+        patient_val = compute_patient_balanced_metrics(
+            model, X_val, y_val, groups_val, task=task
+        )
         scores_train = scores_train | patient_train
         scores_val = scores_val | patient_val
 

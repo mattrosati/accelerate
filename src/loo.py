@@ -14,7 +14,7 @@ Usage (full sweep):
     python src/loo.py --data_mode balanced --run_name hyperpar
 """
 
-import os
+import os, shutil
 import sys
 import json
 from argparse import ArgumentParser
@@ -25,6 +25,7 @@ import pandas as pd
 import dask.array as da
 from sklearn.base import clone
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
+from tqdm.contrib.concurrent import process_map
 from tqdm import tqdm
 
 from tuner import (
@@ -63,9 +64,7 @@ _SUFFIX_ALIASES = {
 
 def _infer_datamode(model_name):
     """Extract the data-mode suffix from a model-name string like 'xgb_pca'."""
-    for alias, canonical in sorted(
-        _SUFFIX_ALIASES.items(), key=lambda kv: -len(kv[0])
-    ):
+    for alias, canonical in sorted(_SUFFIX_ALIASES.items(), key=lambda kv: -len(kv[0])):
         if model_name.endswith(f"_{alias}"):
             return canonical
     # Fall back: last token after splitting on '_'
@@ -138,6 +137,68 @@ def _maybe_reshape_multivar(X, model_name, dataset):
 # -----------------------------------------------------------------------
 
 
+def _loo_single_patient(
+    patient_id,
+    estimator,
+    X,
+    y,
+    groups,
+    labels,
+    balance_mode,
+    max_windows_per_patient,
+):
+    """Train on all patients except *patient_id* and evaluate on the held-out one."""
+    val_mask = groups == patient_id
+    train_mask = ~val_mask
+
+    X_tr, y_tr = X[train_mask], y[train_mask]
+    X_val, y_val = X[val_mask], y[val_mask]
+    groups_tr = groups[train_mask]
+
+    model = clone(estimator)
+
+    # Patient balancing — mirrors src/tuner.py train_cv logic
+    fit_kwargs = {}
+    if balance_mode == "weight":
+        fit_kwargs = get_fit_kwargs(model, make_patient_weights(groups_tr))
+    elif balance_mode == "subsample":
+        rng = np.random.default_rng(42)
+        idx = subsample_by_patient(
+            np.arange(len(y_tr)), groups_tr, max_windows_per_patient, rng
+        )
+        X_tr, y_tr, groups_tr = X_tr[idx], y_tr[idx], groups_tr[idx]
+
+    model.fit(X_tr, y_tr, **fit_kwargs)
+
+    scores, threshold = predict_scores(model, X_val)
+    y_pred = (scores >= threshold).astype(int)
+
+    if len(set(y_val)) < 2:
+        bal_acc = float("nan")
+    else:
+        bal_acc = balanced_accuracy_score(y_val, y_pred)
+
+    record = {
+        "patient_id": patient_id,
+        "n_windows": int(val_mask.sum()),
+        "n_positive": int(y_val.sum()),
+        "n_negative": int(len(y_val) - y_val.sum()),
+        "balanced_accuracy": bal_acc,
+        "sensitivity": (
+            np.nan if y_val.sum() == 0 else (y_pred[y_val == 1] == 1).mean()
+        ),
+        "specificity": (
+            np.nan if y_val.sum() == len(y_val) else (y_pred[y_val == 0] == 0).mean()
+        ),
+    }
+    if np.unique(y_val).shape[0] > 1:
+        record["auc"] = roc_auc_score(y_val, scores, labels=labels)
+    else:
+        record["auc"] = np.nan
+
+    return record
+
+
 def run_loo_for_experiment(
     estimator,
     X,
@@ -146,49 +207,23 @@ def run_loo_for_experiment(
     balance_mode,
     max_windows_per_patient,
 ):
-    """Run leave-one-patient-out evaluation and return a list of per-patient dicts."""
+    """Run leave-one-patient-out evaluation in parallel using all CPUs."""
     unique_patients = np.unique(groups)
-    results = []
+    labels = np.unique(y)
 
-    for patient_id in tqdm(unique_patients, desc="LOO patients", leave=False):
-        val_mask = groups == patient_id
-        train_mask = ~val_mask
+    from functools import partial
 
-        X_tr, y_tr = X[train_mask], y[train_mask]
-        X_val, y_val = X[val_mask], y[val_mask]
-        groups_tr = groups[train_mask]
-
-        model = clone(estimator)
-
-        # Patient balancing — mirrors src/tuner.py train_cv logic
-        fit_kwargs = {}
-        if balance_mode == "weight":
-            fit_kwargs = get_fit_kwargs(model, make_patient_weights(groups_tr))
-        elif balance_mode == "subsample":
-            rng = np.random.default_rng(42)
-            idx = subsample_by_patient(
-                np.arange(len(y_tr)), groups_tr, max_windows_per_patient, rng
-            )
-            X_tr, y_tr, groups_tr = X_tr[idx], y_tr[idx], groups_tr[idx]
-
-        model.fit(X_tr, y_tr, **fit_kwargs)
-
-        scores, threshold = predict_scores(model, X_val)
-        y_pred = (scores >= threshold).astype(int)
-
-        record = {
-            "patient_id": patient_id,
-            "n_windows": int(val_mask.sum()),
-            "n_positive": int(y_val.sum()),
-            "n_negative": int(len(y_val) - y_val.sum()),
-            "balanced_accuracy": balanced_accuracy_score(y_val, y_pred),
-        }
-        if np.unique(y_val).shape[0] > 1:
-            record["auc"] = roc_auc_score(y_val, scores)
-        else:
-            record["auc"] = np.nan
-
-        results.append(record)
+    fn = partial(
+        _loo_single_patient,
+        estimator=estimator,
+        X=X,
+        y=y,
+        groups=groups,
+        labels=labels,
+        balance_mode=balance_mode,
+        max_windows_per_patient=max_windows_per_patient,
+    )
+    results = process_map(fn, unique_patients, desc="LOO patients")
 
     return results
 
@@ -261,16 +296,17 @@ def main():
         dataset_names = sorted(
             d
             for d in os.listdir(train_dir)
-            if os.path.isdir(os.path.join(train_dir, d)) and "chop" in d
+            if os.path.isdir(os.path.join(train_dir, d))
         )
 
     selector = (
-        "mean_val_patient_auc"
-        if args.data_mode == "balanced"
-        else "mean_val_auc"
+        "mean_val_patient_auc" if args.data_mode == "balanced" else "mean_val_auc"
     )
 
-    out_dir = os.path.join(args.output_dir, args.data_mode)
+    out_dir = os.path.join(args.output_dir)
+    if os.path.exists(out_dir):
+        # remove existing CSVs for this selector to avoid appending to old results
+        shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
     # Cache loaded data per (dataset, datamode) to avoid reloading
@@ -334,10 +370,14 @@ def main():
         df["datamode"] = datamode
         df["debug"] = is_debug
 
-        tag = f"{dataset}__{model_name}__loo"
+        tag = f"{args.data_mode}_{args.run_name}_loo"
         csv_path = os.path.join(out_dir, f"{tag}.csv")
-        df.to_csv(csv_path, index=False)
-        print(f"  Saved {csv_path}  ({len(df)} patients)")
+        if os.path.exists(csv_path):
+            print(f"  Appending to existing file {csv_path}")
+            df.to_csv(csv_path, mode="a", header=False, index=False)
+        else:
+            df.to_csv(csv_path, index=False, header=True)
+            print(f"  Saved {csv_path}  ({len(df)} patients)")
 
         # Summary
         summary = {
@@ -355,9 +395,14 @@ def main():
             "mean_auc": float(df["auc"].mean()),
             "n_single_class_patients": int(df["auc"].isna().sum()),
         }
-        summary_path = os.path.join(out_dir, f"{tag}__summary.json")
-        with open(summary_path, "w") as fh:
-            json.dump(summary, fh, indent=2)
+        summary_path = os.path.join(out_dir, f"{tag}_summary.json")
+        summ_df = pd.DataFrame(summary, index=[0])
+        if os.path.exists(summary_path):
+            print(f"  Appending to existing summary file {summary_path}")
+            summ_df.to_csv(summary_path, mode="a", header=False, index=False)
+        else:
+            summ_df.to_csv(summary_path, mode="a", header=False, index=False)
+            print(f"  Saved {summary_path}")
 
         print(
             f"  AUC: median={summary['median_auc']:.3f}, "

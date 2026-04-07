@@ -2,9 +2,10 @@
 #SBATCH --partition=day
 #SBATCH --requeue
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=20G
-#SBATCH --cpus-per-task=2
-#SBATCH --time=6:00:00
+#SBATCH --mem-per-cpu=50G
+#SBATCH --cpus-per-task=15
+#SBATCH --time=1-00:00:00
+#SBATCH --output=/home/mr2238/accelerate/logs/loo/%j.out
 
 date;hostname;pwd
 
@@ -13,11 +14,8 @@ conda activate cppopt-dl
 
 cd /home/mr2238/accelerate
 
-PARAM_LIST="scripts/loo_experiments.txt"
-LINE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$PARAM_LIST")
+echo "LOO experiment"
 
-echo "LOO experiment: $LINE"
-
-python -u src/loo.py $LINE
+python -u src/loo.py --data_mode balanced --run_name hyperpar --output_dir ~/project_pi_np442/mr2238/accelerate/lopo --base_dir /home/mr2238/scratch_pi_np442/mr2238/accelerate
 
 conda deactivate
