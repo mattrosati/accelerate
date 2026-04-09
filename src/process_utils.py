@@ -628,12 +628,12 @@ def get_windows_var(v, ptid, window_index, window_s, config):
                         df2.append([d])
                     else:
                         n_dropped += 1
-                if n_dropped > 0:
-                    print(
-                        f"ptid {ptid}, var {v}: dropped {n_dropped}/{len(df)} "
-                        f"windows ({100 * n_dropped / len(df):.1f}%) due to "
-                        f"start_idx not in label index"
-                    )
+                # if n_dropped > 0:
+                # print(
+                #     f"ptid {ptid}, var {v}: dropped {n_dropped}/{len(df)} "
+                #     f"windows ({100 * n_dropped / len(df):.1f}%) due to "
+                #     f"start_idx not in label index"
+                # )
                 if len(df2) == 0:
                     print(f"no windows for ptid {ptid}")
                     return None, None

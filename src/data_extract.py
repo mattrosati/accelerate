@@ -74,6 +74,14 @@ def _scale_and_mark_outliers(z_arr_flat, v, scaler_mode):
     -------
     scaler, scaled_values (with outliers as NaN), col_mean, col_std
     """
+
+    # anything beyond 3 SDs from the mean is an outlier, mark as NaN (done before scaling so that outliers do not affect scaler fit)
+    col_std = np.sqrt(np.nanvar(z_arr_flat))
+    col_mean = np.nanmean(z_arr_flat)
+    outlier_mask = np.abs(z_arr_flat - col_mean) >= 3 * col_std
+    z_arr_flat[outlier_mask] = np.nan
+
+    # scalers should not be affected by nans, I verified this
     if scaler_mode == "robust":
         if v == "spo2":
             z_arr_flat = 100.0 - z_arr_flat
@@ -87,11 +95,6 @@ def _scale_and_mark_outliers(z_arr_flat, v, scaler_mode):
 
     scaled = scaler.fit_transform(z_arr_flat)
 
-    col_std = np.sqrt(scaler.var_[0])
-    col_mean = scaler.mean_[0]
-    outlier_mask = np.abs(z_arr_flat - col_mean) >= 3 * col_std
-    scaled[outlier_mask] = np.nan
-
     return scaler, scaled, col_mean, col_std
 
 
@@ -99,19 +102,35 @@ def _graph_norm_effect(
     raw_samples, scaled_arr, v, split_label, img_dir, n_samples=100_000
 ):
     """Plot before/after normalization histograms for one variable + split."""
-    sampled_pre = np.random.choice(raw_samples, size=min(n_samples, len(raw_samples)), replace=False)
+    sampled_pre = np.random.choice(
+        raw_samples, size=min(n_samples, len(raw_samples)), replace=False
+    )
     flat_scaled = scaled_arr.ravel()
-    sampled_post = np.random.choice(flat_scaled, size=min(n_samples, len(flat_scaled)), replace=False)
+    sampled_post = np.random.choice(
+        flat_scaled, size=min(n_samples, len(flat_scaled)), replace=False
+    )
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-    sns.histplot(sampled_pre, ax=axes[0], stat="probability", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+    sns.histplot(
+        sampled_pre, ax=axes[0], stat="probability", edgecolor=(0, 0, 0, 0.5), alpha=0.5
+    )
     axes[0].set_title("Before Normalization")
     axes[0].set_xlabel(f"{v}")
-    sns.histplot(sampled_post, ax=axes[1], stat="probability", edgecolor=(0, 0, 0, 0.5), alpha=0.5)
+    sns.histplot(
+        sampled_post,
+        ax=axes[1],
+        stat="probability",
+        edgecolor=(0, 0, 0, 0.5),
+        alpha=0.5,
+    )
     axes[1].set_title("After Normalization")
     axes[1].set_xlabel(f"{v}")
     fig.suptitle(f"Effect of normalization on {v} ({split_label})")
-    plt.savefig(os.path.join(img_dir, f"{v}_norm_effect_{split_label.lower().replace(' ', '_')}.png"))
+    plt.savefig(
+        os.path.join(
+            img_dir, f"{v}_norm_effect_{split_label.lower().replace(' ', '_')}.png"
+        )
+    )
     plt.close()
 
 
@@ -162,11 +181,12 @@ def normalize(
         if graph:
             graph_samples[(v, "test")] = z_arr_test_flat.ravel().copy()
 
+        outlier_mask = np.abs(z_arr_test_flat - col_mean) >= 3 * col_std
+        z_arr_test_flat[outlier_mask] = np.nan
+
         if v == "spo2":
             z_arr_test_flat = 100.0 - z_arr_test_flat
         scaled_test = scaler.transform(z_arr_test_flat)
-        outlier_mask_test = np.abs(z_arr_test_flat - col_mean) >= 3 * col_std
-        scaled_test[outlier_mask_test] = np.nan
         scaled_test = scaled_test.reshape(orig_shape_test)
         da.to_zarr(
             da.from_array(scaled_test),
@@ -196,10 +216,7 @@ def normalize(
 
         keep = ~drop
         keep_masks[split] = keep
-        print(
-            f"    {split}: dropping {drop.sum()}/{n} windows "
-            f"({drop.mean():.1%})"
-        )
+        print(f"    {split}: dropping {drop.sum()}/{n} windows " f"({drop.mean():.1%})")
         for v, cnt in per_var_drops.items():
             if cnt > 0:
                 print(f"      {v}: {cnt} windows exceeded threshold")
@@ -227,16 +244,16 @@ def normalize(
                 dtype=arr.dtype,
             )
             assert not da.isnan(arr).any().compute()
-            da.to_zarr(
-                arr, url=os.path.join(save_dir, split, f"{v}_x_scaled.zarr")
-            )
+            da.to_zarr(arr, url=os.path.join(save_dir, split, f"{v}_x_scaled.zarr"))
 
             # Graph after imputation
             if graph:
                 raw = graph_samples.get((v, split))
                 if raw is not None:
                     _graph_norm_effect(
-                        raw, arr.compute(), v,
+                        raw,
+                        arr.compute(),
+                        v,
                         "Train Set" if split == "train" else "Test Set",
                         img_dir,
                     )
@@ -390,7 +407,9 @@ def finalize(variables, split_dict, save_dir):
             print(f"Finalizing {v} for split {s}:")
             for i, p in tqdm(enumerate(ptids), total=len(ptids)):
                 zarr_pt_store = os.path.join(save_dir, "temp", v, p, "x.zarr")
-                labels_pt_store = os.path.join(save_dir, "temp", f"{p}_combined_labels.pkl")
+                labels_pt_store = os.path.join(
+                    save_dir, "temp", f"{p}_combined_labels.pkl"
+                )
 
                 labels_df = pd.read_pickle(labels_pt_store)
 
@@ -418,10 +437,8 @@ def finalize(variables, split_dict, save_dir):
 
 
 def _bad_frac(reshaped, is_abp=False):
-    """Fraction of values per group that are NaN (or outside [20, 200] for ABP)."""
+    """Fraction of values per group that are NaN."""
     bad = da.isnan(reshaped)
-    if is_abp:
-        bad = bad | (reshaped < ABP_PHYSIO_LO) | (reshaped > ABP_PHYSIO_HI)
     return bad.sum(axis=-1) / reshaped.shape[-1]
 
 
@@ -448,7 +465,9 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
                 time_grid_mult = z_arr.shape[1] // min_points
                 reshaped = da.reshape(z_arr, shape=(z_arr.shape[0], -1, time_grid_mult))
 
-                if strategy == "mean":
+                if (
+                    strategy == "mean" or v == "abp"
+                ):  # always mean for abp so as to get MAP
                     downsampled = da.nanmean(reshaped, axis=-1)
                 elif strategy == "median":
                     downsampled = da.nanmedian(reshaped, axis=-1)
@@ -467,7 +486,9 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
                     downsampled, shape=(downsampled.shape[0], -1, points_per_freq)
                 )
 
-                if strategy == "mean":
+                if (
+                    strategy == "mean" or v == "abp"
+                ):  # always mean for abp so as to get MAP
                     downsampled = da.nanmean(reshaped2, axis=-1)
                 elif strategy == "median":
                     downsampled = da.nanmedian(reshaped2, axis=-1)
@@ -722,6 +743,11 @@ if __name__ == "__main__":
     # finalizing
     finalize(args.variables, split_dict, save_dir)
 
+    # preprocess dataset
+    # remove 3 SD values,normalize, and impute
+    print("Normalizing, removing outliers, and imputing missing values:")
+    normalize(save_dir, args.variables, scaler_mode=args.scaler)
+
     # downsample if we want to match the time grid
     if args.match_grid == 1:
         downsample(args.variables, save_dir, strategy="mean", frequency=args.frequency)
@@ -735,11 +761,6 @@ if __name__ == "__main__":
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     print("")
-
-    # preprocess dataset
-    # normalize, remove 3 SD values, and impute
-    print("Normalizing, removing outliers, and imputing missing values:")
-    normalize(save_dir, args.variables, scaler_mode=args.scaler)
 
     # generates final base dataset
     print("\nGenerating whole dataset:")
