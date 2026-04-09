@@ -25,7 +25,7 @@ import pandas as pd
 import dask.array as da
 from sklearn.base import clone
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
-from tqdm.contrib.concurrent import process_map
+from tqdm.contrib.concurrent import thread_map
 from tqdm import tqdm
 
 from tuner import (
@@ -223,7 +223,7 @@ def run_loo_for_experiment(
         balance_mode=balance_mode,
         max_windows_per_patient=max_windows_per_patient,
     )
-    results = process_map(fn, unique_patients, desc="LOO patients")
+    results = thread_map(fn, unique_patients, desc="LOO patients")
 
     return results
 

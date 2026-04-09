@@ -118,8 +118,8 @@ if __name__ == "__main__":
         "--patient_balance",
         type=str,
         choices=["none", "weight", "subsample"],
-        default="weight",
-        help="How to balance training contribution across patients within each CV fold.",
+        default="none",
+        help="How to balance training contribution across patients within each CV fold. Default none.",
     )
     parser.add_argument(
         "--max_windows_per_patient",
@@ -294,8 +294,10 @@ if __name__ == "__main__":
     elif args.model == "xgb":
         if args.task == "multiclass":
             model = xgb.XGBClassifier(
-                tree_method="hist", objective="multi:softprob",
-                eval_metric="mlogloss", num_class=3,
+                tree_method="hist",
+                objective="multi:softprob",
+                eval_metric="mlogloss",
+                num_class=3,
             )
         else:
             model = xgb.XGBClassifier(tree_method="hist", eval_metric="logloss")

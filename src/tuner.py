@@ -18,7 +18,7 @@ from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import has_fit_parameter
 
-from patient_utils import make_patient_weights  # noqa: E402
+from patient_utils import make_patient_weights
 
 # Ray: disable deprecated env override behavior
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
