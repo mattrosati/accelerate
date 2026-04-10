@@ -237,13 +237,17 @@ def normalize(
             arr = da.from_zarr(marked_store).compute()
             arr = arr[keep_masks[split]]
             arr = da.from_array(arr)
+            arr = arr.rechunk({1: arr.shape[1]})
 
             arr = da.map_blocks(
                 lambda block: np.apply_along_axis(impute, axis=1, arr=block),
                 arr,
                 dtype=arr.dtype,
             )
-            assert not da.isnan(arr).any().compute()
+            assert not da.isnan(arr).any().compute(), (
+                f"NaN remaining after imputation for {v}/{split}. "
+                f"Check for all-NaN windows that slipped through filtering."
+            )
             da.to_zarr(arr, url=os.path.join(save_dir, split, f"{v}_x_scaled.zarr"))
 
             # Graph after imputation
@@ -448,7 +452,7 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
         # find minimum frequency
         min_points = 0
         for v in variables:
-            zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
+            zarr_all_store = os.path.join(save_dir, s, f"{v}_x_scaled.zarr")
             z_arr = da.from_zarr(zarr_all_store)
             if min_points == 0:
                 min_points = z_arr.shape[1]
@@ -457,7 +461,7 @@ def downsample(variables, save_dir, strategy="mean", frequency=60):
 
         # downsample based on minimum frequency
         for v in variables:
-            zarr_all_store = os.path.join(save_dir, s, f"{v}_x.zarr")
+            zarr_all_store = os.path.join(save_dir, s, f"{v}_x_scaled.zarr")
             z_arr = da.from_zarr(zarr_all_store)
             print(f"Downsampling variable {v} in split {s}, shape is {z_arr.shape}.")
 

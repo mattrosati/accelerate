@@ -396,10 +396,10 @@ def impute(window, strategy="lin_interpolate"):
         x_coords = np.arange(len(window))
         w_vals = window[~np.isnan(window)]
         if len(w_vals) == 0:
-            print(len(window), print(len(w_vals), print(window[np.isnan(window)])))
-            print("This should never happen")
-            print("Window completely NaN, cannot impute.")
-            return None
+            raise ValueError(
+                "Window completely NaN, cannot impute. "
+                "This window should have been filtered in Phase 2."
+            )
         window = np.interp(x=x_coords, xp=x_coords[~np.isnan(window)], fp=w_vals)
     else:
         pass  # implement other strategies as desired
